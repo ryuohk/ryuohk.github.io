@@ -1,0 +1,93 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #172033;
+  background: #f4f7fb;
+}
+
+body {
+  width: 340px;
+  margin: 0;
+}
+
+main {
+  padding: 22px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+h1 {
+  margin: 0;
+  font-size: 23px;
+}
+
+.help,
+#folder-status,
+#status,
+.privacy {
+  line-height: 1.45;
+}
+
+.help {
+  color: #536077;
+  font-size: 13px;
+}
+
+.folder-picker {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+#folder-status {
+  margin: 0;
+  font-size: 11px;
+}
+
+.actions {
+  display: grid;
+  gap: 8px;
+}
+
+button {
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  padding: 12px 16px;
+  color: white;
+  background: #2563eb;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #475569;
+}
+
+button:disabled {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+#status {
+  min-height: 38px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+[data-kind="success"] { color: #087a55; }
+[data-kind="warning"] { color: #9a5b00; }
+[data-kind="error"] { color: #b42318; }
+
+.privacy {
+  margin: 0;
+  color: #7a8497;
+  font-size: 11px;
+}

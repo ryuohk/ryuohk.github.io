@@ -1,0 +1,53 @@
+{
+  "format": "crambot.exam-capture",
+  "version": 1,
+  "exportedAt": "2026-08-28T12:00:00.000Z",
+  "source": {
+    "provider": "questions.example",
+    "examCode": "EXAM-101",
+    "pageUrl": "https://questions.example/example"
+  },
+  "questions": [
+    {
+      "examCode": "EXAM-101",
+      "sourceUrl": "https://questions.example/example#question-1",
+      "topic": "Topic 1",
+      "number": "1",
+      "prompt": "A company needs recurring reviews of external users' access and automatic removal when access is not confirmed. What should you recommend?",
+      "choices": [
+        { "label": "A", "text": "Microsoft Entra access reviews" },
+        { "label": "B", "text": "An Azure Automation inventory runbook" },
+        { "label": "C", "text": "A custom role definition" },
+        { "label": "D", "text": "A resource graph query" }
+      ],
+      "correctAnswers": ["A"],
+      "mostVotedAnswers": ["A"],
+      "voteDistribution": [{ "label": "A", "percent": 100 }],
+      "explanation": "Access reviews support recurring attestations and can apply denial results automatically.",
+      "discussionCount": 12,
+      "images": [],
+      "capturedAt": "2026-08-28T12:00:00.000Z"
+    },
+    {
+      "examCode": "EXAM-101",
+      "sourceUrl": "https://questions.example/example#question-2",
+      "topic": "Topic 4",
+      "number": "2",
+      "prompt": "Which service provides private connectivity to a platform service through an address in your virtual network?",
+      "choices": [
+        { "label": "A", "text": "Azure Front Door" },
+        { "label": "B", "text": "Azure Private Link" },
+        { "label": "C", "text": "Azure Traffic Manager" },
+        { "label": "D", "text": "Azure CDN" }
+      ],
+      "correctAnswers": ["B"],
+      "mostVotedAnswers": ["B"],
+      "voteDistribution": [{ "label": "B", "percent": 96 }, { "label": "A", "percent": 4 }],
+      "explanation": "Private Link exposes the service through a private endpoint in the virtual network.",
+      "discussionCount": 4,
+      "images": [],
+      "capturedAt": "2026-08-28T12:00:00.000Z"
+    }
+  ],
+  "warnings": []
+}

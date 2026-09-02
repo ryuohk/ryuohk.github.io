@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "CramBot Exam Capture",
+  "version": "0.3.2",
+  "description": "Capture questions, answers, images, votes, and complete threaded discussions from a page you open.",
+  "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage", "downloads"],
+  "host_permissions": [
+    "https://www.examtopics.com/*",
+    "https://img.examtopics.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "CramBot Exam Capture",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.examtopics.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

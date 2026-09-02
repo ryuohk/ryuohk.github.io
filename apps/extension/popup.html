@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CramBot Capture</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">CRAMBOT</p>
+      <h1>Capture questions</h1>
+      <p class="help">Capture revealed answers, images, vote data, and complete threaded discussions. Automatic capture waits for each page, follows <strong>Next Questions</strong>, and saves one combined JSON file.</p>
+      <div class="folder-picker">
+        <button id="choose-folder" class="secondary" type="button">Choose output folder</button>
+        <p id="folder-status" data-kind="warning">No output folder selected. Your selection will be remembered between runs.</p>
+      </div>
+      <div class="actions">
+        <button id="capture" type="button">Capture this page</button>
+        <button id="capture-all" type="button">Capture all remaining pages</button>
+        <button id="stop" class="secondary" type="button" hidden>Stop automatic capture</button>
+        <button id="save-partial" class="secondary" type="button" hidden>Save retained capture data</button>
+      </div>
+      <p id="status" role="status" aria-live="polite">Open a supported question page to begin.</p>
+      <p class="privacy">Uses only your open question tab and its existing access. The saved folder may require one-click access restoration after restarting the browser.</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

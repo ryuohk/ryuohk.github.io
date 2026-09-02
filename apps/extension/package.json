@@ -1,0 +1,18 @@
+{
+  "name": "@crambot/extension",
+  "version": "0.3.2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs && node scripts/package.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@crambot/core": "0.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "jsdom": "^26.0.0",
+    "vitest": "^3.0.0"
+  }
+}
