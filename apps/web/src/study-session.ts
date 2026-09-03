@@ -12,6 +12,8 @@ export interface StudySettings {
   speakQuestions: boolean;
   /** Speaking rate, roughly 0.5 to 2. Voice choice stays per-device, see speech.ts. */
   speechRate: number;
+  /** Speaking volume, 0 to 1, independent of the device's own volume control. */
+  speechVolume: number;
 }
 
 export interface StudyResult {

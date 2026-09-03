@@ -22,6 +22,7 @@ const settings: StudySettings = {
   masteryCardIds: [],
   speakQuestions: false,
   speechRate: 1.1,
+  speechVolume: 1,
 };
 
 function card(id: string, masteryRating: MasteryRatingValue | null = null, ratingUpdatedAt: string | null = null): StudyCard {

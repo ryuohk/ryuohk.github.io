@@ -7,8 +7,11 @@ import { EXAM_FILTER_KEY, SESSION_KEY, SETTINGS_KEY } from "./study-state";
 import type { SyncResult } from "./sync";
 import {
   DEFAULT_SPEECH_RATE,
+  DEFAULT_SPEECH_VOLUME,
   SPEECH_RATE_MAX,
   SPEECH_RATE_MIN,
+  SPEECH_VOLUME_MAX,
+  SPEECH_VOLUME_MIN,
   buildQuestionSpeech,
   cancelSpeech,
   isSpeechSupported,
@@ -61,6 +64,7 @@ const DEFAULT_STUDY_SETTINGS: StudySettings = {
   masteryCardIds: [],
   speakQuestions: false,
   speechRate: DEFAULT_SPEECH_RATE,
+  speechVolume: DEFAULT_SPEECH_VOLUME,
 };
 /** Per-device: the voice list comes from the OS and differs between machines. */
 const VOICE_KEY = "crambot-speech-voice";
@@ -95,6 +99,7 @@ function readStudySettings(session: StudySession | null = null): StudySettings {
       masteryCardIds: [...new Set([...masteryCardIds, ...legacySessionIds])],
       speakQuestions: stored.speakQuestions === true,
       speechRate: normalizeSpeechRate(stored.speechRate),
+      speechVolume: normalizeSpeechVolume(stored.speechVolume),
     };
   } catch {
     return {
@@ -108,6 +113,12 @@ function normalizeSpeechRate(value: unknown): number {
   const rate = typeof value === "number" ? value : Number.NaN;
   if (!Number.isFinite(rate)) return DEFAULT_SPEECH_RATE;
   return Math.min(SPEECH_RATE_MAX, Math.max(SPEECH_RATE_MIN, rate));
+}
+
+function normalizeSpeechVolume(value: unknown): number {
+  const volume = typeof value === "number" ? value : Number.NaN;
+  if (!Number.isFinite(volume)) return DEFAULT_SPEECH_VOLUME;
+  return Math.min(SPEECH_VOLUME_MAX, Math.max(SPEECH_VOLUME_MIN, volume));
 }
 
 function readExamFilter(): string {
@@ -389,6 +400,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
             // A backup predating speech carries no preference, so keep this device's.
             speakQuestions: restored.speakQuestions ?? existing.speakQuestions,
             speechRate: normalizeSpeechRate(restored.speechRate ?? existing.speechRate),
+            speechVolume: normalizeSpeechVolume(restored.speechVolume ?? existing.speechVolume),
           }));
         }
         setNotice(`Restored ${selection.library.cards.length} questions and ${selection.library.reviews.length} rating records.`);
@@ -673,12 +685,12 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     }
     speakText(
       buildQuestionSpeech(reviewContent.prompt, splitCardFront(currentCard.front).choices, currentCard.questionImages.length),
-      { rate: studySettings.speechRate, voiceURI: voiceURI || null },
+      { rate: studySettings.speechRate, volume: studySettings.speechVolume, voiceURI: voiceURI || null },
     );
     // Leaving the question, the view, or the app stops it mid-sentence rather than
     // talking over whatever comes next.
     return () => cancelSpeech();
-  }, [currentCard?.id, studySettings.speakQuestions, studySettings.speechRate, voiceURI, view]);
+  }, [currentCard?.id, studySettings.speakQuestions, studySettings.speechRate, studySettings.speechVolume, voiceURI, view]);
 
   useEffect(() => () => cancelSpeech(), []);
 
@@ -788,6 +800,18 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                         />
                         <span className="speech-rate-value">{studySettings.speechRate.toFixed(1)}×</span>
                       </label>
+                      <label className="speech-rate">
+                        Volume
+                        <input
+                          type="range"
+                          min={SPEECH_VOLUME_MIN}
+                          max={SPEECH_VOLUME_MAX}
+                          step={0.05}
+                          value={studySettings.speechVolume}
+                          onChange={(event) => setStudySettings((existing) => ({ ...existing, speechVolume: Number(event.target.value) }))}
+                        />
+                        <span className="speech-rate-value">{Math.round(studySettings.speechVolume * 100)}%</span>
+                      </label>
                       {voices.length > 0 && (
                         <label className="speech-voice">
                           Voice
@@ -813,7 +837,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                       <button
                         type="button"
                         className="secondary compact"
-                        onClick={() => speakText("Speech is on. This is how questions will sound.", { rate: studySettings.speechRate, voiceURI: voiceURI || null })}
+                        onClick={() => speakText("Speech is on. This is how questions will sound.", { rate: studySettings.speechRate, volume: studySettings.speechVolume, voiceURI: voiceURI || null })}
                       >
                         Test voice
                       </button>

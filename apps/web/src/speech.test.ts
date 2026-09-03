@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildQuestionSpeech, chunkForSpeech } from "./speech";
+import { buildQuestionSpeech, chunkForSpeech, clampRate, clampVolume } from "./speech";
 
 // Chrome truncates a single utterance at roughly 200 characters with no error, so
 // every chunk staying under the limit is the whole point of this module.
@@ -85,5 +85,29 @@ describe("buildQuestionSpeech", () => {
   it("survives empty and malformed input", () => {
     expect(buildQuestionSpeech("", [])).toBe("");
     expect(buildQuestionSpeech("Prompt.", ["", "   "])).not.toContain("Choices.");
+  });
+});
+
+describe("rate and volume limits", () => {
+  // An utterance with an out-of-range value is rejected by some engines, which
+  // presents as silence rather than an error, so clamping is load-bearing.
+  it("keeps volume within the range engines accept", () => {
+    expect(clampVolume(0.5)).toBe(0.5);
+    expect(clampVolume(0)).toBe(0);
+    expect(clampVolume(1)).toBe(1);
+    expect(clampVolume(4)).toBe(1);
+    expect(clampVolume(-2)).toBe(0);
+  });
+
+  it("falls back to the default for a missing or unusable volume", () => {
+    expect(clampVolume(undefined)).toBe(1);
+    expect(clampVolume(Number.NaN)).toBe(1);
+  });
+
+  it("keeps rate within a range that stays intelligible", () => {
+    expect(clampRate(1.5)).toBe(1.5);
+    expect(clampRate(20)).toBe(2);
+    expect(clampRate(0.01)).toBe(0.5);
+    expect(clampRate(undefined)).toBe(1.1);
   });
 });

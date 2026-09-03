@@ -20,6 +20,10 @@ export const SPEECH_RATE_MIN = 0.5;
 export const SPEECH_RATE_MAX = 2;
 export const DEFAULT_SPEECH_RATE = 1.1;
 
+export const SPEECH_VOLUME_MIN = 0;
+export const SPEECH_VOLUME_MAX = 1;
+export const DEFAULT_SPEECH_VOLUME = 1;
+
 export interface SpeechOptions {
   rate?: number;
   pitch?: number;
@@ -130,9 +134,15 @@ export function onVoicesReady(handler: () => void): () => void {
   return () => synthesis.removeEventListener?.("voiceschanged", handler);
 }
 
-function clampRate(rate: number | undefined): number {
+export function clampRate(rate: number | undefined): number {
   const value = Number.isFinite(rate) ? Number(rate) : DEFAULT_SPEECH_RATE;
   return Math.min(SPEECH_RATE_MAX, Math.max(SPEECH_RATE_MIN, value));
+}
+
+/** Out-of-range volume is rejected outright by some engines, silencing speech. */
+export function clampVolume(volume: number | undefined): number {
+  const value = Number.isFinite(volume) ? Number(volume) : DEFAULT_SPEECH_VOLUME;
+  return Math.min(SPEECH_VOLUME_MAX, Math.max(SPEECH_VOLUME_MIN, value));
 }
 
 /**
@@ -170,7 +180,7 @@ export function speakText(text: string, options: SpeechOptions = {}): void {
     index += 1;
     utterance.rate = clampRate(options.rate);
     utterance.pitch = options.pitch ?? 1;
-    utterance.volume = options.volume ?? 1;
+    utterance.volume = clampVolume(options.volume);
     if (voice) {
       utterance.voice = voice;
       utterance.lang = voice.lang;
