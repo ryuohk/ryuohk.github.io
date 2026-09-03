@@ -64,7 +64,9 @@ type CapturedTextElement = "div" | "h2" | "h3" | "p" | "strong";
 // Imported rather than restated: sync reads and writes these same two keys, and a
 // silent drift between the two spellings would break carry-over without any error.
 const DEFAULT_STUDY_SETTINGS: StudySettings = {
-  masterySetSize: 20,
+  // Small on purpose. This is the size of a first pool, and the empty state offers to
+  // add exactly this many, so it is the first commitment anyone is asked to make.
+  masterySetSize: 5,
   shuffleChoices: false,
   masteryPool: "all-not-easy",
   easyReviewSize: 20,
