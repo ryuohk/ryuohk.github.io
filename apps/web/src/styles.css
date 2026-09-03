@@ -115,9 +115,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .answer-label { margin: 0 0 5px; color: #07845d; font-size: 10px; font-weight: 800; letter-spacing: .12em; }
 .answer-panel h3 { margin: 0 0 8px; white-space: pre-wrap; }
 .answer-panel p { color: #526679; white-space: pre-wrap; overflow-wrap: anywhere; }
-.speech-settings { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px solid #eef1f6; color: #4e6079; font-size: 13px; }
-.speech-toggle { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; cursor: pointer; }
-.speech-toggle input { width: 18px; height: 18px; accent-color: #2563eb; }
+.study-toggles { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px solid #eef1f6; color: #4e6079; font-size: 13px; }
+.study-toggle { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; cursor: pointer; }
+.study-toggle input { width: 18px; height: 18px; accent-color: #2563eb; }
 .speech-rate, .speech-voice { display: inline-flex; align-items: center; gap: 8px; }
 .speech-rate input[type="range"] { width: 120px; accent-color: #2563eb; }
 .speech-rate-value { min-width: 34px; font-variant-numeric: tabular-nums; font-weight: 700; }
@@ -136,13 +136,13 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .speech-more-panel .speech-voice select { max-width: 150px; }
 .speech-more-panel button { align-self: flex-start; }
 @media (max-width: 780px) {
-  .speech-settings { gap: 12px; }
+  .study-toggles { gap: 12px; }
   .speech-rate input[type="range"] { width: 100%; min-width: 140px; }
   .speech-voice { width: 100%; }
   .speech-voice select { flex: 1; max-width: none; }
   /* Anchored to the row rather than the caret, so a narrow screen cannot push the
      panel off the right edge where it would be unreachable. */
-  .speech-settings { position: relative; }
+  .study-toggles { position: relative; }
   .speech-more { position: static; }
   .speech-more-panel { left: 0; right: 0; min-width: 0; }
   .speech-more-panel .speech-voice select { max-width: none; }

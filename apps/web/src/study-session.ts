@@ -5,6 +5,8 @@ export type MasteryPool = "all-not-easy" | "again-hard";
 
 export interface StudySettings {
   masterySetSize: number;
+  /** Present answer choices in a random order, so their position cannot be learned. */
+  shuffleChoices: boolean;
   masteryPool: MasteryPool;
   easyReviewSize: number;
   masteryCardIds: string[];
@@ -125,7 +127,10 @@ export function createStudySession(
       random,
     );
   } else {
-    candidates = filterEasyReviewPool(cards).slice(0, settings.easyReviewSize);
+    // Chosen oldest first, so a review works through what you have not seen in
+    // longest, but played in a random order: the selection rule alone would walk the
+    // same sequence every time and turn the running order itself into a memory aid.
+    candidates = shuffleItems(filterEasyReviewPool(cards).slice(0, settings.easyReviewSize), random);
   }
   const order = candidates.map((card) => card.id);
   return {

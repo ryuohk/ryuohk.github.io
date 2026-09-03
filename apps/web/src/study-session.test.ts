@@ -17,6 +17,7 @@ import { MasteryRating, type MasteryRating as MasteryRatingValue, type StudyCard
 
 const settings: StudySettings = {
   masterySetSize: 2,
+  shuffleChoices: false,
   masteryPool: "all-not-easy",
   easyReviewSize: 2,
   masteryCardIds: [],
@@ -131,17 +132,31 @@ describe("mastery study sessions", () => {
     ];
 
     expect(filterEasyReviewPool(cards).map(({ id }) => id)).toEqual(["oldest", "middle", "newer"]);
+    // Which two are reviewed is decided by age; the order they arrive in is not.
     const session = createStudySession(cards, settings, "easy-review");
-    expect(session.order).toEqual(["oldest", "middle"]);
+    expect(new Set(session.order)).toEqual(new Set(["oldest", "middle"]));
+  });
+
+  // Selecting by age alone would replay the same sequence every time, which turns the
+  // running order itself into a cue for the answer.
+  it("plays the Easy review in a shuffled order", () => {
+    const cards = ["a", "b", "c", "d"].map((id, index) => card(id, MasteryRating.Easy, `2026-08-0${index + 1}T00:00:00.000Z`));
+    const byAge = filterEasyReviewPool(cards).map(({ id }) => id);
+    const played = createStudySession(cards, { ...settings, easyReviewSize: 4 }, "easy-review", () => 0).order;
+
+    expect(new Set(played)).toEqual(new Set(byAge));
+    expect(played).not.toEqual(byAge);
   });
 
   it("shows each Easy Review question once even when it is relabeled Hard", () => {
     const session = createStudySession([card("one", MasteryRating.Easy), card("two", MasteryRating.Easy)], settings, "easy-review");
-    const next = advanceStudySession(session, "one", MasteryRating.Hard, ["A. One"], ["A"]);
+    // Named by position rather than by id, now that the running order is shuffled.
+    const [asked, next] = session.queue;
+    const answered = advanceStudySession(session, asked, MasteryRating.Hard, ["A. One"], ["A"]);
 
-    expect(next.queue).toEqual(["two"]);
-    expect(next.completed).toBe(1);
-    expect(next.results[0]).toMatchObject({ cardId: "one", rating: MasteryRating.Hard, correct: true });
+    expect(answered.queue).toEqual([next]);
+    expect(answered.completed).toBe(1);
+    expect(answered.results[0]).toMatchObject({ cardId: asked, rating: MasteryRating.Hard, correct: true });
   });
 
   it("checks normalized single and multiple-choice answers exactly", () => {

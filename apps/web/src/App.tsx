@@ -48,6 +48,7 @@ import {
   normalizeAnswerLabel,
   selectMasteryAdditions,
   setSessionAnswer,
+  shuffleItems,
   summarizeStudySession,
   updateMasteryCardIds,
   type StudyMode,
@@ -63,6 +64,7 @@ type CapturedTextElement = "div" | "h2" | "h3" | "p" | "strong";
 // silent drift between the two spellings would break carry-over without any error.
 const DEFAULT_STUDY_SETTINGS: StudySettings = {
   masterySetSize: 20,
+  shuffleChoices: false,
   masteryPool: "all-not-easy",
   easyReviewSize: 20,
   masteryCardIds: [],
@@ -98,6 +100,7 @@ function readStudySettings(session: StudySession | null = null): StudySettings {
     const legacySessionIds = session?.mode === "mastery" ? normalizeCardIds(session.queue) : [];
     return {
       masterySetSize: normalizeQuestionCount(stored.masterySetSize, migratedCount),
+      shuffleChoices: stored.shuffleChoices === true,
       masteryPool: stored.masteryPool === "again-hard" ? "again-hard" : "all-not-easy",
       easyReviewSize: normalizeQuestionCount(stored.easyReviewSize, migratedCount),
       masteryCardIds: [...new Set([...masteryCardIds, ...legacySessionIds])],
@@ -373,6 +376,20 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     historyResult ? historyResult.selectedAnswers : currentCard && studySession ? studySession.answers[currentCard.id] ?? [] : [],
   );
   const reviewContent = currentCard ? splitCardFront(currentCard.front) : null;
+  /**
+   * The choices in the order they are shown, which is also the order they are read.
+   *
+   * Keyed on the question and the toggle rather than on the choices array, which is
+   * rebuilt every render and would otherwise reshuffle on every keystroke. Flipping the
+   * toggle is a dependency change, so it reshuffles what is on screen at once; turning
+   * it off restores the order the question was captured in.
+   */
+  const displayChoices = useMemo(() => {
+    if (!currentCard) return [];
+    const choices = splitCardFront(currentCard.front).choices;
+    return studySettings.shuffleChoices ? shuffleItems(choices) : choices;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentCard?.id, currentCard?.front, studySettings.shuffleChoices]);
   // History is always shown answered; there is nothing to reveal about it.
   const showAnswer = revealed || viewingHistory;
   const answerWasCorrect = showAnswer ? evaluateAnswer([...activeChoices], correctAnswers) : null;
@@ -400,10 +417,11 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
           const count = normalizeQuestionCount(restored.questionCount, studySettings.masterySetSize);
           setStudySettings((existing) => ({
             masterySetSize: normalizeQuestionCount(restored.masterySetSize, count),
+            // A backup predating either preference carries none, so keep this device's.
+            shuffleChoices: restored.shuffleChoices ?? existing.shuffleChoices,
             masteryPool: restored.masteryPool === "again-hard" ? "again-hard" : "all-not-easy",
             easyReviewSize: normalizeQuestionCount(restored.easyReviewSize, count),
             masteryCardIds: normalizeCardIds(restored.masteryCardIds),
-            // A backup predating speech carries no preference, so keep this device's.
             speakQuestions: restored.speakQuestions ?? existing.speakQuestions,
             speechRate: normalizeSpeechRate(restored.speechRate ?? existing.speechRate),
             speechVolume: normalizeSpeechVolume(restored.speechVolume ?? existing.speechVolume),
@@ -721,9 +739,9 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
 
   const currentSpeechText = useMemo(
     () => currentCard && reviewContent
-      ? buildQuestionSpeech(reviewContent.prompt, splitCardFront(currentCard.front).choices, currentCard.questionImages.length)
+      ? buildQuestionSpeech(reviewContent.prompt, displayChoices, currentCard.questionImages.length)
       : "",
-    [currentCard, reviewContent],
+    [currentCard, reviewContent, displayChoices],
   );
 
   /**
@@ -805,7 +823,9 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     }
     setSpeechPaused(false);
     speakText(
-      buildQuestionSpeech(reviewContent.prompt, splitCardFront(currentCard.front).choices, currentCard.questionImages.length),
+      // Read in the order shown. Not a dependency: reshuffling mid-question should not
+      // interrupt the reading, and the choices are read from the current value anyway.
+      buildQuestionSpeech(reviewContent.prompt, displayChoices, currentCard.questionImages.length),
       () => speechOptionsRef.current,
     );
     // Leaving the question, the view, or the app stops it mid-sentence rather than
@@ -899,9 +919,17 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 </> : <button className="primary compact" disabled={easyPool.length === 0} onClick={() => startStudySession("easy-review")}>{studySession ? "Restart review" : "Start Easy review"}</button>}
                 {studySession && <button className="secondary compact" onClick={() => setStudySession(null)}>End session</button>}
               </div>
-              {isSpeechSupported() && (
-                <div className="speech-settings">
-                  <label className="speech-toggle">
+              <div className="study-toggles">
+                <label className="study-toggle">
+                  <input
+                    type="checkbox"
+                    checked={studySettings.shuffleChoices}
+                    onChange={(event) => setStudySettings((existing) => ({ ...existing, shuffleChoices: event.target.checked }))}
+                  />
+                  Shuffle choices
+                </label>
+                {isSpeechSupported() && (
+                  <label className="study-toggle">
                     <input
                       type="checkbox"
                       checked={studySettings.speakQuestions}
@@ -909,7 +937,8 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                     />
                     Read questions aloud
                   </label>
-                  {studySettings.speakQuestions && (
+                )}
+                {isSpeechSupported() && studySettings.speakQuestions && (
                     <>
                       <button
                         type="button"
@@ -990,10 +1019,9 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                           </button>
                         </div>
                       </details>
-                    </>
-                  )}
-                </div>
-              )}
+                  </>
+                )}
+              </div>
             </div>
 
             <div className="progress-card">
@@ -1066,7 +1094,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 {reviewContent.context && <details className="case-study-reference"><summary>Case study reference</summary><CapturedText text={reviewContent.context} as="div" /></details>}
                 {currentCard.questionImages.length > 0 && <div className="question-images">{currentCard.questionImages.map((image) => <img key={image.src} src={image.dataUrl || image.src} alt={image.alt || "Question diagram"} />)}</div>}
                 <div className="choices" aria-label="Answer choices">
-                  {splitCardFront(currentCard.front).choices.map((choice) => {
+                  {displayChoices.map((choice) => {
                     const selected = activeChoices.has(choice);
                     const expected = correctAnswers.map(normalizeAnswerLabel).includes(normalizeAnswerLabel(choice));
                     const feedbackClass = showAnswer ? expected ? "correct-choice" : selected ? "incorrect-choice" : "" : "";
