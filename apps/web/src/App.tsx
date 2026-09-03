@@ -701,6 +701,8 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [speechPaused, setSpeechPaused] = useState(false);
   const [speechActive, setSpeechActive] = useState(false);
+  const [speechMenuOpen, setSpeechMenuOpen] = useState(false);
+  const speechMenuRef = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     const refresh = () => setVoices(listSpeechVoices());
     refresh();
@@ -741,6 +743,38 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     const timer = window.setInterval(tick, 400);
     return () => window.clearInterval(timer);
   }, [studySettings.speakQuestions, currentCard?.id, speechPaused]);
+
+  /**
+   * Closes the speech settings panel on a click outside it, or on Escape.
+   *
+   * A `details` element only closes when its own summary is clicked, which for a panel
+   * floating over the question means it stays open while you carry on reading behind
+   * it. Listening on pointerdown rather than click means dragging a slider and
+   * releasing outside the panel does not count as leaving: the gesture began inside.
+   */
+  useEffect(() => {
+    if (!speechMenuOpen) return;
+    const close = () => {
+      if (speechMenuRef.current) speechMenuRef.current.open = false;
+      setSpeechMenuOpen(false);
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const menu = speechMenuRef.current;
+      // A missing element means the panel was unmounted, by the toggle being switched
+      // off, while it was open. Clearing the state here detaches these listeners.
+      if (menu && menu.contains(event.target as Node)) return;
+      close();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [speechMenuOpen]);
 
   /** One button covering pause, resume, and replaying a question already read out. */
   function toggleSpeechPlayback() {
@@ -888,7 +922,11 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                       {/* Speed, volume and voice are set once and then never touched, so
                           they sit behind a caret rather than taking a band of the screen
                           above every question. */}
-                      <details className="speech-more">
+                      <details
+                        className="speech-more"
+                        ref={speechMenuRef}
+                        onToggle={(event) => setSpeechMenuOpen(event.currentTarget.open)}
+                      >
                         <summary title="Speech settings" aria-label="Speech settings">
                           {studySettings.speechRate.toFixed(1)}× · {Math.round(studySettings.speechVolume * 100)}%
                         </summary>
