@@ -75,11 +75,23 @@ const DEFAULT_STUDY_SETTINGS: StudySettings = {
 /** Per-device: the voice list comes from the OS and differs between machines. */
 const VOICE_KEY = "crambot-speech-voice";
 
+/**
+ * Two labels, because only two things ever happened.
+ *
+ * The old four were Anki's, and those words name scheduling intervals: "Again" is show
+ * me in a minute, "Good" is the normal gap. Scheduling was taken out of this app, so
+ * whichever of the three non-Easy buttons you pressed, the question simply went to the
+ * back of the queue. Nothing in the code branched on Good at all, and Hard existed only
+ * to populate one dropdown option.
+ *
+ * The stored values are untouched. Not yet writes 1 and Got it writes 4, exactly as
+ * Again and Easy did, so nothing already rated has to be migrated, and a device still
+ * running an older build can write a 2 or a 3 without confusing anything: those read
+ * back as Not yet, which is what they always behaved as.
+ */
 const RATING_OPTIONS = [
-  { value: MasteryRating.Again, label: "Again", tone: "again" },
-  { value: MasteryRating.Hard, label: "Hard", tone: "hard" },
-  { value: MasteryRating.Good, label: "Good", tone: "good" },
-  { value: MasteryRating.Easy, label: "Easy", tone: "easy" },
+  { value: MasteryRating.Again, label: "Not yet", tone: "again" },
+  { value: MasteryRating.Easy, label: "Got it", tone: "easy" },
 ] as const;
 
 function normalizeQuestionCount(value: unknown, fallback: number): number {
@@ -101,7 +113,10 @@ function readStudySettings(session: StudySession | null = null): StudySettings {
     return {
       masterySetSize: normalizeQuestionCount(stored.masterySetSize, migratedCount),
       shuffleChoices: stored.shuffleChoices === true,
-      masteryPool: stored.masteryPool === "again-hard" ? "again-hard" : "all-not-easy",
+      // Pinned, not read. With two labels "Again + Hard only" and "All not Easy" select
+      // the same questions, so the choice was removed. Reading a stored "again-hard"
+      // would quietly hide questions carrying the retired Good, which are in the pool.
+      masteryPool: "all-not-easy",
       easyReviewSize: normalizeQuestionCount(stored.easyReviewSize, migratedCount),
       masteryCardIds: [...new Set([...masteryCardIds, ...legacySessionIds])],
       speakQuestions: stored.speakQuestions === true,
@@ -153,7 +168,15 @@ function formatDuration(seconds: number): string {
 }
 
 function ratingLabel(rating: MasteryRatingValue | null): string {
-  return RATING_OPTIONS.find((option) => option.value === rating)?.label ?? "Unrated";
+  if (rating === null) return "Unrated";
+  // Retired Hard and Good read as Not yet: they always behaved as in-pool.
+  return rating === MasteryRating.Easy ? "Got it" : "Not yet";
+}
+
+/** A class-name-safe stand-in, since the labels themselves now contain a space. */
+function ratingTone(rating: MasteryRatingValue | null): string {
+  if (rating === null) return "unrated";
+  return rating === MasteryRating.Easy ? "easy" : "again";
 }
 
 function downloadJson(data: unknown, filename: string) {
@@ -894,7 +917,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
           <section className="review-layout mastery-layout">
             <section className="mastery-overview" aria-label="Mastery progress">
               <div><strong>{allNotEasy.length}</strong><span>to master</span></div>
-              <div><strong>{easyPool.length}</strong><span>Easy</span></div>
+              <div><strong>{easyPool.length}</strong><span>got it</span></div>
               <div><strong>{examCards.length ? Math.round((easyPool.length / examCards.length) * 100) : 0}%</strong><span>mastered</span></div>
               <button className="danger-button" disabled={busy || examCards.length === 0} onClick={() => void handleReset()}>{examFilter === ALL_EXAMS ? "Reset all labels" : `Reset ${examFilter} labels`}</button>
             </section>
@@ -902,10 +925,10 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
             <div className="study-controls">
               <div className="mode-tabs two-mode" role="group" aria-label="Study mode">
                 <button className={studyMode === "mastery" ? "active" : ""} aria-pressed={studyMode === "mastery"} onClick={() => { setStudyMode("mastery"); setStudySession(null); setRevealed(false); }}>Mastery</button>
-                <button className={studyMode === "easy-review" ? "active" : ""} aria-pressed={studyMode === "easy-review"} onClick={() => { setStudyMode("easy-review"); setStudySession(null); setRevealed(false); }}>Review Easy</button>
+                <button className={studyMode === "easy-review" ? "active" : ""} aria-pressed={studyMode === "easy-review"} onClick={() => { setStudyMode("easy-review"); setStudySession(null); setRevealed(false); }}>Review</button>
               </div>
               <p className="mode-description">{studyMode === "mastery"
-                ? "Build a persistent pool and work each question until it reaches Easy."
+                ? "Build a persistent pool and work each question until you have got it."
                 : "Review mastered questions once; relabel anything that needs more work."}</p>
               <div className="session-settings simplified-settings">
                 {studyMode === "mastery" ? <>
@@ -914,10 +937,6 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                     value={studySettings.masterySetSize}
                     onCommit={(masterySetSize) => setStudySettings((existing) => ({ ...existing, masterySetSize }))}
                   />
-                  <label>Include<select value={studySettings.masteryPool} onChange={(event) => setStudySettings((existing) => ({ ...existing, masteryPool: event.target.value as StudySettings["masteryPool"] }))}>
-                    <option value="all-not-easy">All not Easy</option>
-                    <option value="again-hard">Again + Hard only</option>
-                  </select></label>
                   <span className="pool-count">{currentMasteryPool.length} in pool · {masteryAdditionsAvailable.length} available to add</span>
                 </> : <>
                   <CountField
@@ -925,7 +944,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                     value={studySettings.easyReviewSize}
                     onCommit={(easyReviewSize) => setStudySettings((existing) => ({ ...existing, easyReviewSize }))}
                   />
-                  <span className="pool-count">{easyPool.length} Easy</span>
+                  <span className="pool-count">{easyPool.length} to review</span>
                 </>}
                 {studyMode === "mastery" ? <>
                   {!studySession && <button className="primary compact" disabled={currentMasteryPool.length === 0} onClick={() => startStudySession("mastery")}>Study current pool</button>}
@@ -1053,7 +1072,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
             {sessionFinished && studySession && sessionSummary ? (
               <section className="results-card">
                 <p className="kicker">SESSION COMPLETE</p>
-                <h2>{studySession.mode === "mastery" ? "Mastery set complete" : "Easy review complete"}</h2>
+                <h2>{studySession.mode === "mastery" ? "Mastery set complete" : "Review complete"}</h2>
                 <div className="result-metrics">
                   <div><strong>{sessionSummary.completed}</strong><span>{studySession.mode === "mastery" ? "mastered" : "reviewed"}</span></div>
                   <div><strong>{formatDuration(sessionSummary.durationSeconds)}</strong><span>duration</span></div>
@@ -1062,7 +1081,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 </div>
                 <div className="result-actions">
                   <button className="primary" disabled={currentMasteryPool.length === 0 && masteryAdditionsAvailable.length === 0} onClick={() => currentMasteryPool.length ? startStudySession("mastery") : addToMasteryPool(true)}>{currentMasteryPool.length ? "Study Mastery pool" : "Build Mastery pool"}</button>
-                  <button className="secondary" disabled={easyPool.length === 0} onClick={() => startStudySession("easy-review")}>Review Easy questions</button>
+                  <button className="secondary" disabled={easyPool.length === 0} onClick={() => startStudySession("easy-review")}>Review what you know</button>
                   <button className="secondary" onClick={() => setStudySession(null)}>Done</button>
                 </div>
               </section>
@@ -1072,7 +1091,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                   {/* Counts mastery, not position. Unmastered cards are pushed back onto
                       the queue, so there is no stable position to count through. */}
                   <span>{currentCard.tags.join(" · ") || "Uncategorized"}</span>
-                  <span className={`mastery-label label-${ratingLabel(currentCard.masteryRating).toLowerCase()}`}>{ratingLabel(currentCard.masteryRating)}</span>
+                  <span className={`mastery-label label-${ratingTone(currentCard.masteryRating)}`}>{ratingLabel(currentCard.masteryRating)}</span>
                 </div>
                 {studySession && (studySession.results.length > 0 || viewingHistory) && (
                   <div className="history-nav">
@@ -1125,8 +1144,8 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                     {currentCard.answerImages.length > 0 && <div className="answer-images">{currentCard.answerImages.map((image) => <img key={image.src} src={image.dataUrl || image.src} alt={image.alt || "Answer diagram"} />)}</div>}
                     {currentCard.explanation && <CapturedText text={currentCard.explanation} as="p" />}
                     {currentQuestion?.discussion && <DiscussionPanel discussion={currentQuestion.discussion} expectedCount={currentQuestion.discussionCount} />}
-                    <p className="rating-help">{studySession?.mode === "mastery" ? "Easy removes this question from the Mastery pool. Again, Hard, and Good keep it in the pool." : "Again adds this question to your Mastery pool. Hard and Good return it to the general Mastery list."}</p>
-                    <div className="ratings" aria-label="Set difficulty label">{RATING_OPTIONS.map((rating, index) => <button key={rating.value} className={rating.tone} onClick={() => void handleRating(rating.value)}>{rating.label} <kbd>{index + 1}</kbd></button>)}</div>
+                    <p className="rating-help">{studySession?.mode === "mastery" ? "Got it retires this question from the pool. Not yet keeps it in and brings it round again." : "Not yet puts this question back into your Mastery pool. Got it keeps it in the review rotation."}</p>
+                    <div className="ratings" aria-label="Rate this question">{RATING_OPTIONS.map((rating, index) => <button key={rating.value} className={rating.tone} onClick={() => void handleRating(rating.value)}>{rating.label} <kbd>{index + 1}</kbd></button>)}</div>
                   </div>
                 )}
               </article>
@@ -1134,7 +1153,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
               <div className="empty-state">
                 <div className="empty-icon">✓</div>
                 <h2>{!cards.length ? "No questions yet" : studyMode === "mastery" ? allNotEasy.length ? "Build your next Mastery set" : "All questions mastered" : easyPool.length ? "Review mastered questions" : "No Easy questions yet"}</h2>
-                <p>{!cards.length ? "Capture a question page with the extension, then import its JSON file." : studyMode === "mastery" ? allNotEasy.length ? "Choose a set size and work every question to Easy." : "Review Easy questions or reset all labels to begin another pass." : easyPool.length ? "Review the least recently practiced Easy questions first." : "Master questions to Easy before starting a review."}</p>
+                <p>{!cards.length ? "Capture a question page with the extension, then import its JSON file." : studyMode === "mastery" ? allNotEasy.length ? "Choose a set size and work every question until you have got it." : "Review what you know or reset all labels to begin another pass." : easyPool.length ? "Revisit what you have not been asked in longest, first." : "Mark questions as Got it before starting a review."}</p>
                 {!cards.length && <button className="primary" onClick={() => setView("import")}>Import a capture</button>}
               </div>
             )}
@@ -1159,7 +1178,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 return <article className={selected ? "selected" : ""} key={card.id}>
                   <label className="card-checkbox"><input type="checkbox" checked={selected} onChange={() => toggleSelection(card.id)} aria-label={`Select question: ${content.prompt}`} /></label>
                   <div className="library-card-content">
-                    <div className="library-card-meta"><span className="tag">{card.tags.join(" · ") || "Uncategorized"}</span><div className="library-card-actions"><span className={`mastery-label label-${ratingLabel(card.masteryRating).toLowerCase()}`}>{ratingLabel(card.masteryRating)}</span><button className="danger-link" disabled={busy || !canDeleteCard(card)} title={canDeleteCard(card) ? undefined : "Only the person who contributed this question, or a library owner, can delete it."} onClick={() => void handleRemove([card], "single")}>Delete</button></div></div>
+                    <div className="library-card-meta"><span className="tag">{card.tags.join(" · ") || "Uncategorized"}</span><div className="library-card-actions"><span className={`mastery-label label-${ratingTone(card.masteryRating)}`}>{ratingLabel(card.masteryRating)}</span><button className="danger-link" disabled={busy || !canDeleteCard(card)} title={canDeleteCard(card) ? undefined : "Only the person who contributed this question, or a library owner, can delete it."} onClick={() => void handleRemove([card], "single")}>Delete</button></div></div>
                     <CapturedText text={content.prompt} as="h3" /><p><strong>Answer:</strong> {card.back}</p>{card.notes && <p><strong>Notes:</strong> {card.notes}</p>}
                   </div>
                 </article>;

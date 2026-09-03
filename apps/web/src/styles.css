@@ -92,8 +92,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .mastery-label { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 9px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .label-unrated { color: #536178; background: #eef1f5; }
 .label-again { color: #a82419; background: #ffe9e7; }
-.label-hard { color: #9a5b00; background: #fff0cb; }
-.label-good { color: #087a55; background: #dff8ef; }
 .label-easy { color: #185ac5; background: #e5efff; }
 /* pre-wrap so captured line breaks survive; anywhere so long URLs and code in a
    prompt cannot push the card wider than the screen. */
@@ -184,12 +182,10 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 
 .rating-help { margin: 16px 0 0; padding-top: 13px; border-top: 1px solid #d8eee6; font-size: 12px; }
 .shortcut { margin-left: 6px; border: 1px solid #ffffff66; border-radius: 5px; padding: 2px 6px; font-size: 10px; opacity: .9; }
-.ratings { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; margin-top: 20px; }
+.ratings { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; margin-top: 20px; }
 .ratings button { border: 0; border-radius: 9px; padding: 11px 5px; font-weight: 750; }
 .ratings button { display: flex; align-items: center; justify-content: center; gap: 7px; }
 .ratings .again { color: #a82419; background: #ffe9e7; }
-.ratings .hard { color: #9a5b00; background: #fff0cb; }
-.ratings .good { color: #087a55; background: #dff8ef; }
 .ratings .easy { color: #185ac5; background: #e5efff; }
 .empty-state { min-height: 430px; display: grid; place-items: center; align-content: center; padding: 45px; text-align: center; }
 .empty-icon { width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; color: #087a55; background: #dcf8ee; font-size: 27px; }
