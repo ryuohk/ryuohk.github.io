@@ -19,14 +19,18 @@ import {
 } from "./db";
 import { prepareImportSelection } from "./importer";
 import {
+  addCardsToMasterySession,
   advanceStudySession,
+  cleanMasteryCardIds,
   createStudySession,
   evaluateAnswer,
   filterEasyReviewPool,
   filterMasteryPool,
   normalizeAnswerLabel,
+  selectMasteryAdditions,
   setSessionAnswer,
   summarizeStudySession,
+  updateMasteryCardIds,
   type StudyMode,
   type StudySession,
   type StudySettings,
@@ -42,6 +46,7 @@ const DEFAULT_STUDY_SETTINGS: StudySettings = {
   masterySetSize: 20,
   masteryPool: "all-not-easy",
   easyReviewSize: 20,
+  masteryCardIds: [],
 };
 const RATING_OPTIONS = [
   { value: MasteryRating.Again, label: "Again", tone: "again" },
@@ -55,18 +60,28 @@ function normalizeQuestionCount(value: unknown, fallback: number): number {
   return Number.isFinite(count) ? Math.max(1, Math.floor(count)) : fallback;
 }
 
-function readStudySettings(): StudySettings {
+function normalizeCardIds(value: unknown): string[] {
+  return Array.isArray(value) ? [...new Set(value.filter((item): item is string => typeof item === "string" && item.length > 0))] : [];
+}
+
+function readStudySettings(session: StudySession | null = null): StudySettings {
   try {
     const current = localStorage.getItem(SETTINGS_KEY);
     const stored = JSON.parse(current ?? localStorage.getItem("crambot-study-settings") ?? "{}") as Partial<StudySettings> & { questionCount?: number };
     const migratedCount = normalizeQuestionCount(stored.questionCount, DEFAULT_STUDY_SETTINGS.masterySetSize);
+    const masteryCardIds = normalizeCardIds(stored.masteryCardIds);
+    const legacySessionIds = session?.mode === "mastery" ? normalizeCardIds(session.queue) : [];
     return {
       masterySetSize: normalizeQuestionCount(stored.masterySetSize, migratedCount),
       masteryPool: stored.masteryPool === "again-hard" ? "again-hard" : "all-not-easy",
       easyReviewSize: normalizeQuestionCount(stored.easyReviewSize, migratedCount),
+      masteryCardIds: [...new Set([...masteryCardIds, ...legacySessionIds])],
     };
   } catch {
-    return DEFAULT_STUDY_SETTINGS;
+    return {
+      ...DEFAULT_STUDY_SETTINGS,
+      masteryCardIds: session?.mode === "mastery" ? normalizeCardIds(session.queue) : [],
+    };
   }
 }
 
@@ -170,7 +185,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   const [questions, setQuestions] = useState<CapturedQuestion[]>([]);
   const [view, setView] = useState<View>("study");
   const [studyMode, setStudyMode] = useState<StudyMode>(restoredSession?.mode ?? "mastery");
-  const [studySettings, setStudySettings] = useState<StudySettings>(readStudySettings);
+  const [studySettings, setStudySettings] = useState<StudySettings>(() => readStudySettings(restoredSession));
   const [studySession, setStudySession] = useState<StudySession | null>(restoredSession);
   const [revealed, setRevealed] = useState(false);
   const [query, setQuery] = useState("");
@@ -187,6 +202,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
       .then(([storedCards, storedQuestions]) => {
         setCards(storedCards);
         setQuestions(storedQuestions);
+        setStudySettings((existing) => ({ ...existing, masteryCardIds: cleanMasteryCardIds(storedCards, existing.masteryCardIds) }));
         setNotice(storedCards.length ? restoredSession ? "Resumed your saved study session." : "" : "Import your first capture to begin.");
         if (restoredSession) {
           const availableIds = new Set(storedCards.map((card) => card.id));
@@ -207,13 +223,14 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
       void Promise.all([listCards(), listQuestions()]).then(([storedCards, storedQuestions]) => {
         setCards(storedCards);
         setQuestions(storedQuestions);
+        setStudySettings((existing) => ({ ...existing, masteryCardIds: cleanMasteryCardIds(storedCards, existing.masteryCardIds) }));
       });
     }
     // Only a set genuinely handed over from another device replaces what is on screen.
     if (result.stateAdopted) {
-      setStudySettings(readStudySettings());
       setExamFilter(readExamFilter());
       const adopted = readStudySession();
+      setStudySettings(readStudySettings(adopted));
       setStudySession(adopted);
       if (adopted) setStudyMode(adopted.mode);
       // The revealed answer belonged to the card this tab was on, not the incoming one.
@@ -236,7 +253,15 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   const examCodes = useMemo(() => listExamCodes(cards, questionById), [cards, questionById]);
   const examCards = useMemo(() => filterCardsByExam(cards, examFilter, questionById), [cards, examFilter, questionById]);
   const allNotEasy = useMemo(() => filterMasteryPool(examCards, "all-not-easy"), [examCards]);
-  const masteryPool = useMemo(() => filterMasteryPool(examCards, studySettings.masteryPool), [examCards, studySettings.masteryPool]);
+  const masteryPoolIds = useMemo(() => new Set(studySettings.masteryCardIds), [studySettings.masteryCardIds]);
+  const currentMasteryPool = useMemo(
+    () => examCards.filter((card) => masteryPoolIds.has(card.id) && card.masteryRating !== MasteryRating.Easy),
+    [examCards, masteryPoolIds],
+  );
+  const masteryAdditionsAvailable = useMemo(
+    () => filterMasteryPool(examCards, studySettings.masteryPool).filter((card) => !masteryPoolIds.has(card.id)),
+    [examCards, masteryPoolIds, studySettings.masteryPool],
+  );
   const easyPool = useMemo(() => filterEasyReviewPool(examCards), [examCards]);
   useEffect(() => {
     // Guard on examCodes being populated. On a device whose library has not synced
@@ -304,6 +329,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
             masterySetSize: normalizeQuestionCount(restored.masterySetSize, count),
             masteryPool: restored.masteryPool === "again-hard" ? "again-hard" : "all-not-easy",
             easyReviewSize: normalizeQuestionCount(restored.easyReviewSize, count),
+            masteryCardIds: normalizeCardIds(restored.masteryCardIds),
           });
         }
         setNotice(`Restored ${selection.library.cards.length} questions and ${selection.library.reviews.length} rating records.`);
@@ -314,6 +340,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
       const [refreshedCards, refreshedQuestions] = await Promise.all([listCards(), listQuestions()]);
       setCards(refreshedCards);
       setQuestions(refreshedQuestions);
+      setStudySettings((existing) => ({ ...existing, masteryCardIds: cleanMasteryCardIds(refreshedCards, existing.masteryCardIds) }));
       setSelectedCardIds(new Set());
       setStudySession(null);
       setStudyMode("mastery");
@@ -352,7 +379,27 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     setStudyMode(mode);
     setStudySession(nextSession);
     setRevealed(false);
-    setNotice(nextSession.total ? "" : mode === "mastery" ? "No questions match this Mastery pool." : "No Easy questions are available to review.");
+    setNotice(nextSession.total ? "" : mode === "mastery" ? "Your Mastery pool is empty. Add questions to begin." : "No Easy questions are available to review.");
+  }
+
+  function addToMasteryPool(startAfterAdding = false) {
+    const additions = selectMasteryAdditions(examCards, studySettings);
+    if (additions.length === 0) {
+      setNotice("No additional questions match the selected Mastery filter.");
+      return;
+    }
+    const nextSettings = {
+      ...studySettings,
+      masteryCardIds: [...new Set([...studySettings.masteryCardIds, ...additions])],
+    };
+    setStudySettings(nextSettings);
+    setStudySession((existing) => {
+      if (existing?.mode === "mastery") return addCardsToMasterySession(existing, additions);
+      return startAfterAdding ? createStudySession(examCards, nextSettings, "mastery") : existing;
+    });
+    if (startAfterAdding) setStudyMode("mastery");
+    setRevealed(false);
+    setNotice(`${additions.length} question${additions.length === 1 ? "" : "s"} added to the Mastery pool.`);
   }
 
   async function handleRating(rating: MasteryRatingValue) {
@@ -373,6 +420,10 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     try {
       await saveReview(updated, review);
       setCards((existing) => existing.map((card) => card.id === updated.id ? updated : card));
+      setStudySettings((existing) => ({
+        ...existing,
+        masteryCardIds: updateMasteryCardIds(existing.masteryCardIds, currentCard.id, studySession.mode, rating),
+      }));
       setStudySession((existing) => existing
         ? advanceStudySession(existing, currentCard.id, rating, [...activeChoices], correctAnswers, now)
         : null);
@@ -405,7 +456,12 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
       setStudySession(null);
       setRevealed(false);
       setStudyMode("mastery");
-      setStudySettings((existing) => ({ ...existing, masteryPool: "all-not-easy" }));
+      const resetIds = new Set(examCards.map((card) => card.id));
+      setStudySettings((existing) => ({
+        ...existing,
+        masteryPool: "all-not-easy",
+        masteryCardIds: existing.masteryCardIds.filter((cardId) => !resetIds.has(cardId)),
+      }));
       setNotice(`Reset ${scope === "all exams" ? `${examCards.length} question labels across all exams` : `${examCards.length} ${scope} question labels`}. Start a new Mastery set when ready.`);
       cloud.request();
     } catch (error) {
@@ -452,6 +508,10 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
       const removedIds = new Set(cardsToRemove.map((card) => card.id));
       setCards((existing) => existing.filter((card) => !removedIds.has(card.id)));
       setSelectedCardIds((existing) => new Set([...existing].filter((id) => !removedIds.has(id))));
+      setStudySettings((existing) => ({
+        ...existing,
+        masteryCardIds: existing.masteryCardIds.filter((cardId) => !removedIds.has(cardId)),
+      }));
       setStudySession((existing) => {
         if (!existing) return null;
         const order = existing.order.filter((id) => !removedIds.has(id));
@@ -543,12 +603,12 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 <button className={studyMode === "easy-review" ? "active" : ""} aria-pressed={studyMode === "easy-review"} onClick={() => { setStudyMode("easy-review"); setStudySession(null); setRevealed(false); }}>Review Easy</button>
               </div>
               <p className="mode-description">{studyMode === "mastery"
-                ? "Work each selected question until it reaches Easy."
+                ? "Build a persistent pool and work each question until it reaches Easy."
                 : "Review mastered questions once; relabel anything that needs more work."}</p>
               <div className="session-settings simplified-settings">
                 {studyMode === "mastery" ? <>
                   <CountField
-                    label="Questions in set"
+                    label="Questions to add"
                     value={studySettings.masterySetSize}
                     onCommit={(masterySetSize) => setStudySettings((existing) => ({ ...existing, masterySetSize }))}
                   />
@@ -556,7 +616,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                     <option value="all-not-easy">All not Easy</option>
                     <option value="again-hard">Again + Hard only</option>
                   </select></label>
-                  <span className="pool-count">{masteryPool.length} available</span>
+                  <span className="pool-count">{currentMasteryPool.length} in pool · {masteryAdditionsAvailable.length} available to add</span>
                 </> : <>
                   <CountField
                     label="Questions to review"
@@ -565,7 +625,10 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                   />
                   <span className="pool-count">{easyPool.length} Easy</span>
                 </>}
-                <button className="primary compact" disabled={(studyMode === "mastery" ? masteryPool.length : easyPool.length) === 0} onClick={() => startStudySession()}>{studySession ? "Restart set" : studyMode === "mastery" ? "Start Mastery set" : "Start Easy review"}</button>
+                {studyMode === "mastery" ? <>
+                  {!studySession && <button className="primary compact" disabled={currentMasteryPool.length === 0} onClick={() => startStudySession("mastery")}>Study current pool</button>}
+                  <button className={studySession ? "primary compact" : "secondary compact"} disabled={masteryAdditionsAvailable.length === 0} onClick={() => addToMasteryPool()}>{studySession ? "Add questions" : "Add questions to pool"}</button>
+                </> : <button className="primary compact" disabled={easyPool.length === 0} onClick={() => startStudySession("easy-review")}>{studySession ? "Restart review" : "Start Easy review"}</button>}
                 {studySession && <button className="secondary compact" onClick={() => setStudySession(null)}>End session</button>}
               </div>
             </div>
@@ -576,8 +639,8 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 <div><span className="metric">{studySession.completed}</span><small>{studyMode === "mastery" ? "mastered" : "reviewed"}</small></div>
                 <div><span className="metric">{studySession.attempts}</span><small>attempts</small></div>
               </> : <>
-                <div><span className="metric">{studyMode === "mastery" ? masteryPool.length : easyPool.length}</span><small>available</small></div>
-                <div><span className="metric">{studyMode === "mastery" ? studySettings.masterySetSize : studySettings.easyReviewSize}</span><small>set target</small></div>
+                <div><span className="metric">{studyMode === "mastery" ? currentMasteryPool.length : easyPool.length}</span><small>{studyMode === "mastery" ? "in pool" : "available"}</small></div>
+                <div><span className="metric">{studyMode === "mastery" ? masteryAdditionsAvailable.length : studySettings.easyReviewSize}</span><small>{studyMode === "mastery" ? "available to add" : "set target"}</small></div>
               </>}
             </div>
 
@@ -592,7 +655,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                   <div><strong>{sessionSummary.accuracy === null ? "—" : `${sessionSummary.accuracy}%`}</strong><span>answer accuracy</span></div>
                 </div>
                 <div className="result-actions">
-                  <button className="primary" disabled={masteryPool.length === 0} onClick={() => startStudySession("mastery")}>Start next Mastery set</button>
+                  <button className="primary" disabled={currentMasteryPool.length === 0 && masteryAdditionsAvailable.length === 0} onClick={() => currentMasteryPool.length ? startStudySession("mastery") : addToMasteryPool(true)}>{currentMasteryPool.length ? "Study Mastery pool" : "Build Mastery pool"}</button>
                   <button className="secondary" disabled={easyPool.length === 0} onClick={() => startStudySession("easy-review")}>Review Easy questions</button>
                   <button className="secondary" onClick={() => setStudySession(null)}>Done</button>
                 </div>
@@ -625,7 +688,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                     {currentCard.answerImages.length > 0 && <div className="answer-images">{currentCard.answerImages.map((image) => <img key={image.src} src={image.dataUrl || image.src} alt={image.alt || "Answer diagram"} />)}</div>}
                     {currentCard.explanation && <CapturedText text={currentCard.explanation} as="p" />}
                     {currentQuestion?.discussion && <DiscussionPanel discussion={currentQuestion.discussion} expectedCount={currentQuestion.discussionCount} />}
-                    <p className="rating-help">{studySession?.mode === "mastery" ? "Easy completes this question. Again, Hard, and Good keep it in this set." : "Anything below Easy sends this question back to Mastery."}</p>
+                    <p className="rating-help">{studySession?.mode === "mastery" ? "Easy removes this question from the Mastery pool. Again, Hard, and Good keep it in the pool." : "Again adds this question to your Mastery pool. Hard and Good return it to the general Mastery list."}</p>
                     <div className="ratings" aria-label="Set difficulty label">{RATING_OPTIONS.map((rating, index) => <button key={rating.value} className={rating.tone} onClick={() => void handleRating(rating.value)}>{rating.label} <kbd>{index + 1}</kbd></button>)}</div>
                   </div>
                 )}

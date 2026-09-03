@@ -7,6 +7,7 @@ export interface StudySettings {
   masterySetSize: number;
   masteryPool: MasteryPool;
   easyReviewSize: number;
+  masteryCardIds: string[];
 }
 
 export interface StudyResult {
@@ -68,6 +69,41 @@ export function filterEasyReviewPool(cards: readonly StudyCard[]): StudyCard[] {
     .sort((left, right) => (left.ratingUpdatedAt ?? "").localeCompare(right.ratingUpdatedAt ?? ""));
 }
 
+function uniqueCardIds(cardIds: readonly string[]): string[] {
+  return [...new Set(cardIds.filter(Boolean))];
+}
+
+export function cleanMasteryCardIds(cards: readonly StudyCard[], cardIds: readonly string[]): string[] {
+  const activeIds = new Set(cards.filter((card) => card.masteryRating !== MasteryRating.Easy).map((card) => card.id));
+  return uniqueCardIds(cardIds).filter((cardId) => activeIds.has(cardId));
+}
+
+export function selectMasteryAdditions(
+  cards: readonly StudyCard[],
+  settings: StudySettings,
+  random = Math.random,
+): string[] {
+  const currentIds = new Set(settings.masteryCardIds);
+  const eligible = filterMasteryPool(cards, settings.masteryPool).filter((card) => !currentIds.has(card.id));
+  const again = eligible.filter((card) => card.masteryRating === MasteryRating.Again);
+  const remaining = eligible.filter((card) => card.masteryRating !== MasteryRating.Again);
+  return [...shuffleItems(again, random), ...shuffleItems(remaining, random)]
+    .slice(0, settings.masterySetSize)
+    .map((card) => card.id);
+}
+
+export function updateMasteryCardIds(
+  cardIds: readonly string[],
+  cardId: string,
+  mode: StudyMode,
+  rating: MasteryRatingValue,
+): string[] {
+  const current = uniqueCardIds(cardIds);
+  if (rating === MasteryRating.Easy) return current.filter((id) => id !== cardId);
+  if (mode === "mastery" || rating === MasteryRating.Again) return uniqueCardIds([...current, cardId]);
+  return current;
+}
+
 export function createStudySession(
   cards: readonly StudyCard[],
   settings: StudySettings,
@@ -75,9 +111,16 @@ export function createStudySession(
   random = Math.random,
   now = new Date(),
 ): StudySession {
-  const candidates = mode === "mastery"
-    ? shuffleItems(filterMasteryPool(cards, settings.masteryPool), random).slice(0, settings.masterySetSize)
-    : filterEasyReviewPool(cards).slice(0, settings.easyReviewSize);
+  let candidates: StudyCard[];
+  if (mode === "mastery") {
+    const cardsById = new Map(cards.map((card) => [card.id, card]));
+    candidates = shuffleItems(
+      cleanMasteryCardIds(cards, settings.masteryCardIds).map((cardId) => cardsById.get(cardId)!),
+      random,
+    );
+  } else {
+    candidates = filterEasyReviewPool(cards).slice(0, settings.easyReviewSize);
+  }
   const order = candidates.map((card) => card.id);
   return {
     id: `${now.getTime()}-${mode}`,
@@ -90,6 +133,19 @@ export function createStudySession(
     results: [],
     answers: {},
     startedAt: now.toISOString(),
+  };
+}
+
+export function addCardsToMasterySession(session: StudySession, cardIds: readonly string[]): StudySession {
+  if (session.mode !== "mastery") return session;
+  const knownIds = new Set(session.order);
+  const additions = uniqueCardIds(cardIds).filter((cardId) => !knownIds.has(cardId));
+  if (additions.length === 0) return session;
+  return {
+    ...session,
+    queue: [...session.queue, ...additions],
+    order: [...session.order, ...additions],
+    total: session.total + additions.length,
   };
 }
 

@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  addCardsToMasterySession,
   advanceStudySession,
+  cleanMasteryCardIds,
   createStudySession,
   evaluateAnswer,
   filterEasyReviewPool,
   filterMasteryPool,
+  selectMasteryAdditions,
   summarizeStudySession,
+  updateMasteryCardIds,
   type StudySettings,
 } from "./study-session";
 import { MasteryRating, type MasteryRating as MasteryRatingValue, type StudyCard } from "./types";
@@ -14,6 +18,7 @@ const settings: StudySettings = {
   masterySetSize: 2,
   masteryPool: "all-not-easy",
   easyReviewSize: 2,
+  masteryCardIds: [],
 };
 
 function card(id: string, masteryRating: MasteryRatingValue | null = null, ratingUpdatedAt: string | null = null): StudyCard {
@@ -50,14 +55,57 @@ describe("mastery study sessions", () => {
     expect(filterMasteryPool(cards, "again-hard").map(({ id }) => id)).toEqual(["again", "hard"]);
   });
 
-  it("limits a Mastery set to the configured number of unique questions", () => {
-    const session = createStudySession([card("one"), card("two"), card("three")], settings, "mastery", () => 0.99);
-    expect(session.order).toHaveLength(2);
-    expect(new Set(session.order)).toHaveLength(2);
+  it("builds a Mastery session only from the persistent pool", () => {
+    const pooled = { ...settings, masteryCardIds: ["one", "two"] };
+    const session = createStudySession([card("one"), card("two"), card("outside")], pooled, "mastery", () => 0.99);
+
+    expect(new Set(session.order)).toEqual(new Set(["one", "two"]));
+    expect(session.order).not.toContain("outside");
+  });
+
+  it("prioritizes Again cards when adding a limited batch to the Mastery pool", () => {
+    const oneQuestion = { ...settings, masterySetSize: 1 };
+    const additions = selectMasteryAdditions([
+      card("unrated"),
+      card("forgotten", MasteryRating.Again),
+      card("good", MasteryRating.Good),
+    ], oneQuestion, () => 0.99);
+
+    expect(additions).toEqual(["forgotten"]);
+  });
+
+  it("adds Review Easy failures to the pool once and removes them only at Easy", () => {
+    const ignoredHard = updateMasteryCardIds([], "needs-work", "easy-review", MasteryRating.Hard);
+    const added = updateMasteryCardIds([], "forgotten", "easy-review", MasteryRating.Again);
+    const deduplicated = updateMasteryCardIds(added, "forgotten", "easy-review", MasteryRating.Again);
+    const retained = updateMasteryCardIds(deduplicated, "forgotten", "mastery", MasteryRating.Good);
+    const removed = updateMasteryCardIds(retained, "forgotten", "mastery", MasteryRating.Easy);
+
+    expect(ignoredHard).toEqual([]);
+    expect(added).toEqual(["forgotten"]);
+    expect(deduplicated).toEqual(["forgotten"]);
+    expect(retained).toEqual(["forgotten"]);
+    expect(removed).toEqual([]);
+  });
+
+  it("appends unique questions to a running Mastery session", () => {
+    const session = createStudySession([card("one")], { ...settings, masteryCardIds: ["one"] }, "mastery");
+    const expanded = addCardsToMasterySession(session, ["two", "one", "two"]);
+
+    expect(expanded.queue).toEqual(["one", "two"]);
+    expect(expanded.order).toEqual(["one", "two"]);
+    expect(expanded.total).toBe(2);
+  });
+
+  it("prunes missing, duplicate, and Easy cards from a saved Mastery pool", () => {
+    expect(cleanMasteryCardIds(
+      [card("active", MasteryRating.Hard), card("easy", MasteryRating.Easy)],
+      ["active", "missing", "easy", "active"],
+    )).toEqual(["active"]);
   });
 
   it("keeps a Mastery question in rotation until it is rated Easy", () => {
-    const session = createStudySession([card("one"), card("two")], settings, "mastery", () => 0.99);
+    const session = createStudySession([card("one"), card("two")], { ...settings, masteryCardIds: ["one", "two"] }, "mastery", () => 0.99);
     const repeated = advanceStudySession(session, "one", MasteryRating.Good, ["A. One"], ["A"]);
     const mastered = advanceStudySession(repeated, "two", MasteryRating.Easy);
 
