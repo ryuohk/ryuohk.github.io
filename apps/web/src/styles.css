@@ -24,10 +24,10 @@ button { cursor: pointer; touch-action: manipulation; }
 .sidebar-foot p { margin: 0 0 6px; color: #62e6b8; font-size: 10px; font-weight: 800; letter-spacing: .12em; }
 
 .workspace { width: min(1120px, 100%); margin: 0 auto; padding: 42px 52px 70px; }
-.topbar { display: flex; justify-content: space-between; align-items: end; gap: 24px; margin-bottom: 28px; }
+.topbar { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 20px; }
 .kicker, .step { margin: 0 0 7px; color: #2563eb; font-size: 11px; font-weight: 800; letter-spacing: .14em; }
 h1, h2, h3 { font-family: Aptos, "Segoe UI", sans-serif; }
-h1 { margin: 0; color: #111a2c; font-size: clamp(28px, 4vw, 42px); letter-spacing: -.035em; }
+h1 { margin: 0; color: #111a2c; font-size: clamp(21px, 2.2vw, 26px); letter-spacing: -.02em; }
 .secondary, .primary { border: 0; border-radius: 10px; padding: 11px 16px; font-weight: 700; }
 .secondary { border: 1px solid #d8deea; background: white; color: #3d4a60; }
 .primary { color: white; background: #2563eb; }
@@ -64,7 +64,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .notice.sync-failure strong { color: #a82419; }
 .notice.sync-failure span { overflow-wrap: anywhere; }
 
-.mastery-overview { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 10px; align-items: center; padding: 14px 16px; border: 1px solid #e0e5ee; border-radius: 14px; background: white; }
+.mastery-overview { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: center; padding: 14px 16px; border: 1px solid #e0e5ee; border-radius: 14px; background: white; }
 .mastery-overview div { display: grid; gap: 2px; }
 .mastery-overview strong { color: #172033; font-size: 22px; }
 .mastery-overview span { color: #778499; font-size: 11px; }
@@ -79,6 +79,11 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .session-settings select { min-height: 35px; border: 1px solid #d8deea; border-radius: 8px; padding: 6px 28px 6px 9px; color: #35445c; background: white; }
 .session-settings input[type="text"], .session-settings input[type="number"] { min-height: 35px; border: 1px solid #d8deea; border-radius: 8px; padding: 6px 9px; color: #35445c; background: white; }
 .pool-count { margin-left: auto; align-self: center; color: #778499; font-size: 12px; white-space: nowrap; }
+.running-session { gap: 9px; }
+/* Destructive actions stack in their own panel rather than sitting in the toolbar. */
+.danger-menu > summary { color: #8a94a6; font-weight: 800; letter-spacing: .08em; }
+.danger-menu .more-panel { min-width: 220px; gap: 9px; }
+.danger-menu .more-panel button { width: 100%; }
 .progress-card { grid-column: 2; grid-row: 3; border: 1px solid #e0e5ee; border-radius: 16px; padding: 8px 18px; background: #fff; box-shadow: 0 8px 24px #1621390a; }
 .progress-card div { padding: 15px 0; border-bottom: 1px solid #edf0f5; }
 .progress-card div:last-child { border-bottom: 0; }
@@ -121,18 +126,20 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .speech-rate-value { min-width: 34px; font-variant-numeric: tabular-nums; font-weight: 700; }
 .speech-voice select { max-width: 210px; }
 
-/* Speed, volume and voice live behind this caret. The panel is positioned rather than
-   inline so opening it does not push the question itself down the page. */
-.speech-more { position: relative; }
-.speech-more > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid #dbe3ee; border-radius: 8px; background: #fff; font-variant-numeric: tabular-nums; font-weight: 700; color: #4e6079; }
-.speech-more > summary::-webkit-details-marker { display: none; }
-.speech-more > summary::after { content: "▾"; font-size: 11px; opacity: 0.65; }
-.speech-more[open] > summary::after { content: "▴"; }
-.speech-more > summary:hover { border-color: #b9c7db; }
-.speech-more-panel { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; display: flex; flex-direction: column; gap: 12px; min-width: 260px; padding: 14px; border: 1px solid #e2e8f2; border-radius: 12px; background: #fff; box-shadow: 0 12px 32px rgba(15, 30, 55, 0.14); }
-.speech-more-panel .speech-rate, .speech-more-panel .speech-voice { justify-content: space-between; }
-.speech-more-panel .speech-voice select { max-width: 150px; }
-.speech-more-panel button { align-self: flex-start; }
+/* One caret, used for the speech settings and for the actions that cannot be undone.
+   The panel is positioned rather than inline so opening it does not push the page
+   about, and it sits above everything so it is never clipped by a card edge. */
+.more-menu { position: relative; }
+.more-menu > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid #dbe3ee; border-radius: 8px; background: #fff; font-variant-numeric: tabular-nums; font-weight: 700; color: #4e6079; }
+.more-menu > summary::-webkit-details-marker { display: none; }
+.more-menu > summary::after { content: "▾"; font-size: 11px; opacity: 0.65; }
+.more-menu[open] > summary::after { content: "▴"; }
+.more-menu > summary:hover { border-color: #b9c7db; }
+.more-panel { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; display: flex; flex-direction: column; gap: 12px; min-width: 260px; padding: 14px; border: 1px solid #e2e8f2; border-radius: 12px; background: #fff; box-shadow: 0 12px 32px rgba(15, 30, 55, 0.14); }
+.more-panel .speech-rate, .more-panel .speech-voice { justify-content: space-between; }
+.more-panel .speech-voice select { max-width: 150px; }
+.more-panel button { align-self: flex-start; }
+.danger-menu .more-panel button { align-self: stretch; }
 @media (max-width: 780px) {
   .study-toggles { gap: 12px; }
   .speech-rate input[type="range"] { width: 100%; min-width: 140px; }
@@ -141,9 +148,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   /* Anchored to the row rather than the caret, so a narrow screen cannot push the
      panel off the right edge where it would be unreachable. */
   .study-toggles { position: relative; }
-  .speech-more { position: static; }
-  .speech-more-panel { left: 0; right: 0; min-width: 0; }
-  .speech-more-panel .speech-voice select { max-width: none; }
+  .more-menu { position: static; }
+  .more-panel { left: 0; right: 0; min-width: 0; }
+  .more-panel .speech-voice select { max-width: none; }
 }
 
 .history-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 18px; }
@@ -251,7 +258,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .topbar-actions { width: 100%; justify-content: flex-start; }
   .review-layout { display: flex; flex-direction: column; }
   .mastery-overview { width: 100%; grid-template-columns: repeat(3, 1fr); order: -3; }
-  .mastery-overview .danger-button { min-height: 44px; grid-column: 1 / -1; }
   .study-controls { width: 100%; order: -2; }
   .mode-tabs button { min-height: 44px; padding-inline: 6px; font-size: 12px; }
   .session-settings label:not(.checkbox-setting) { flex: 1 1 140px; }
@@ -276,8 +282,11 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .card-meta { align-items: start; flex-direction: column; }
   .card-meta-actions { width: 100%; justify-content: space-between; }
   .library-manager { align-items: stretch; flex-direction: column; }
-  .library-bulk-actions { justify-content: stretch; }
+  .library-bulk-actions { position: relative; justify-content: stretch; }
   .library-bulk-actions button { min-height: 44px; flex: 1 1 auto; }
+  .library-bulk-actions > .more-menu { flex: 0 0 auto; }
+  .library-bulk-actions > .more-menu > summary { min-height: 44px; padding-inline: 14px; }
+  .danger-menu .more-panel button { flex: none; }
   .library-tools input { font-size: 16px; }
   .card-list article { padding: 16px 14px; }
   .library-card-meta { align-items: start; }

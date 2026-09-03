@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { signOut, type AuthState } from "./auth";
 import { repairRunTogetherText, shouldShowAnswerText, splitCapturedList, splitCardFront, stripChoiceLabel } from "./card-content";
 import { DiscussionPanel } from "./DiscussionPanel";
@@ -201,6 +201,50 @@ function SyncBadge({ cloud }: { cloud: CloudSync }) {
           ? `${cloud.pending} pending`
           : "Synced";
   return <button className={`sync-badge ${cloud.phase}`} onClick={() => cloud.request()} title={cloud.error ?? undefined}>{label}</button>;
+}
+
+/**
+ * A panel behind a caret, for controls that are set once or used rarely.
+ *
+ * A `details` element only closes when its own summary is clicked, which for a panel
+ * floating over the page means it stays open while you carry on working behind it.
+ * The outside click is caught on pointerdown rather than click, so dragging a slider
+ * and releasing beyond the panel does not count as leaving: the gesture began inside.
+ */
+function MoreMenu({ label, title, className, children }: { label: ReactNode; title: string; className?: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDetailsElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = () => {
+      if (menuRef.current) menuRef.current.open = false;
+      setOpen(false);
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const menu = menuRef.current;
+      // A missing element means the panel was unmounted while open. Clearing the state
+      // here is what detaches these listeners.
+      if (menu && menu.contains(event.target as Node)) return;
+      close();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <details className={`more-menu ${className ?? ""}`.trim()} ref={menuRef} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary title={title} aria-label={title}>{label}</summary>
+      <div className="more-panel">{children}</div>
+    </details>
+  );
 }
 
 function CapturedText({ text: raw, as: Element, className }: { text: string; as: CapturedTextElement; className?: string }) {
@@ -792,8 +836,6 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [speechPaused, setSpeechPaused] = useState(false);
   const [speechActive, setSpeechActive] = useState(false);
-  const [speechMenuOpen, setSpeechMenuOpen] = useState(false);
-  const speechMenuRef = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     const refresh = () => setVoices(listSpeechVoices());
     refresh();
@@ -835,37 +877,6 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     return () => window.clearInterval(timer);
   }, [studySettings.speakQuestions, currentCard?.id, speechPaused]);
 
-  /**
-   * Closes the speech settings panel on a click outside it, or on Escape.
-   *
-   * A `details` element only closes when its own summary is clicked, which for a panel
-   * floating over the question means it stays open while you carry on reading behind
-   * it. Listening on pointerdown rather than click means dragging a slider and
-   * releasing outside the panel does not count as leaving: the gesture began inside.
-   */
-  useEffect(() => {
-    if (!speechMenuOpen) return;
-    const close = () => {
-      if (speechMenuRef.current) speechMenuRef.current.open = false;
-      setSpeechMenuOpen(false);
-    };
-    const onPointerDown = (event: PointerEvent) => {
-      const menu = speechMenuRef.current;
-      // A missing element means the panel was unmounted, by the toggle being switched
-      // off, while it was open. Clearing the state here detaches these listeners.
-      if (menu && menu.contains(event.target as Node)) return;
-      close();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [speechMenuOpen]);
 
   /** One button covering pause, resume, and replaying a question already read out. */
   function toggleSpeechPlayback() {
@@ -927,7 +938,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
 
       <main className="workspace">
         <header className="topbar">
-          <div><p className="kicker">MASTERY STUDY</p><h1>{view === "study" ? "Study" : view === "library" ? "Question library" : "Import captures"}</h1></div>
+          <h1>{view === "study" ? "Study" : view === "library" ? "Library" : "Import"}</h1>
           <div className="topbar-actions">
             {view !== "import" && examCodes.length > 0 && <label className="exam-filter">Exam<select value={examFilter} onChange={(event) => changeExamFilter(event.target.value)}>
               <option value={ALL_EXAMS}>All exams</option>
@@ -950,14 +961,25 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
 
         {view === "study" && (
           <section className="review-layout mastery-layout">
+            {/* Setup, and the standing totals, are about choosing what to study. Once a
+                session is running they sit between you and the question for no reason,
+                so they give way to the row below and the question moves up the page. */}
+            {!studySession && (
             <section className="mastery-overview" aria-label="Mastery progress">
               <div><strong>{allNotEasy.length}</strong><span>to master</span></div>
               <div><strong>{easyPool.length}</strong><span>got it</span></div>
               <div><strong>{examCards.length ? Math.round((easyPool.length / examCards.length) * 100) : 0}%</strong><span>mastered</span></div>
-              <button className="danger-button" disabled={busy || examCards.length === 0} onClick={() => void handleReset()}>{examFilter === ALL_EXAMS ? "Reset all labels" : `Reset ${examFilter} labels`}</button>
             </section>
+            )}
 
             <div className="study-controls">
+              {studySession ? (
+              <div className="session-settings running-session">
+                {studyMode === "mastery" && <button className="secondary compact" disabled={masteryAdditionsAvailable.length === 0} onClick={() => addToMasteryPool()}>Add questions</button>}
+                <button className="secondary compact" onClick={() => setStudySession(null)}>End session</button>
+              </div>
+              ) : (
+              <>
               <div className="mode-tabs two-mode" role="group" aria-label="Study mode">
                 <button className={studyMode === "mastery" ? "active" : ""} aria-pressed={studyMode === "mastery"} onClick={() => { setStudyMode("mastery"); setStudySession(null); setRevealed(false); }}>Mastery</button>
                 <button className={studyMode === "easy-review" ? "active" : ""} aria-pressed={studyMode === "easy-review"} onClick={() => { setStudyMode("easy-review"); setStudySession(null); setRevealed(false); }}>Review</button>
@@ -982,12 +1004,13 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                   <span className="pool-count">{easyPool.length} to review</span>
                 </>}
                 {studyMode === "mastery" ? <>
-                  {!studySession && <button className="primary compact" disabled={currentMasteryPool.length === 0} onClick={() => startStudySession("mastery")}>Study current pool</button>}
-                  <button className={studySession ? "primary compact" : "secondary compact"} disabled={masteryAdditionsAvailable.length === 0} onClick={() => addToMasteryPool()}>{studySession ? "Add questions" : "Add questions to pool"}</button>
+                  <button className="primary compact" disabled={currentMasteryPool.length === 0} onClick={() => startStudySession("mastery")}>Study current pool</button>
+                  <button className="secondary compact" disabled={masteryAdditionsAvailable.length === 0} onClick={() => addToMasteryPool()}>Add questions to pool</button>
                   <button className="secondary compact" disabled={currentMasteryPool.length === 0} onClick={() => clearMasteryPool()}>Clear pool</button>
-                </> : <button className="primary compact" disabled={easyPool.length === 0} onClick={() => startStudySession("easy-review")}>{studySession ? "Restart review" : "Start Easy review"}</button>}
-                {studySession && <button className="secondary compact" onClick={() => setStudySession(null)}>End session</button>}
+                </> : <button className="primary compact" disabled={easyPool.length === 0} onClick={() => startStudySession("easy-review")}>Start review</button>}
               </div>
+              </>
+              )}
               <div className="study-toggles">
                 <label className="study-toggle">
                   <input
@@ -1020,15 +1043,10 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                       {/* Speed, volume and voice are set once and then never touched, so
                           they sit behind a caret rather than taking a band of the screen
                           above every question. */}
-                      <details
-                        className="speech-more"
-                        ref={speechMenuRef}
-                        onToggle={(event) => setSpeechMenuOpen(event.currentTarget.open)}
+                      <MoreMenu
+                        title="Speech settings"
+                        label={`${studySettings.speechRate.toFixed(1)}× · ${Math.round(studySettings.speechVolume * 100)}%`}
                       >
-                        <summary title="Speech settings" aria-label="Speech settings">
-                          {studySettings.speechRate.toFixed(1)}× · {Math.round(studySettings.speechVolume * 100)}%
-                        </summary>
-                        <div className="speech-more-panel">
                           <label className="speech-rate">
                             Speed
                             <input
@@ -1086,8 +1104,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                           >
                             Test voice
                           </button>
-                        </div>
-                      </details>
+                      </MoreMenu>
                   </>
                 )}
               </div>
@@ -1197,16 +1214,19 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
 
         {view === "library" && (
           <section className="library">
+            <div className="library-tools"><input type="search" aria-label="Search question library" placeholder="Search questions, answers, notes, or tags" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
             <div className="library-manager">
               <div><strong>{examFilter === ALL_EXAMS ? `${cards.length} question${cards.length === 1 ? "" : "s"} in your library` : `${examCards.length} ${examFilter} question${examCards.length === 1 ? "" : "s"} (${cards.length} total)`}</strong><span>{selectedCardIds.size ? `${selectedCardIds.size} selected` : `${filteredCards.length} shown`}</span></div>
               <div className="library-bulk-actions">
                 <button className="secondary compact" disabled={busy || filteredCards.length === 0} onClick={toggleFilteredSelection}>{allFilteredSelected ? "Clear shown" : `Select shown (${filteredCards.length})`}</button>
                 <button className="primary compact" disabled={busy || selectedCards.length === 0} onClick={() => void handleAddSelectedToPool()}>Add to Mastery pool</button>
                 <button className="danger-button" disabled={busy || selectedCards.filter(canDeleteCard).length === 0} onClick={() => void handleRemove(selectedCards, "selected")}>Delete selected</button>
-                <button className="danger-button danger-solid" disabled={busy || examCards.filter(canDeleteCard).length === 0} onClick={() => void handleRemove(examCards, "all")}>{examFilter === ALL_EXAMS ? "Delete all questions" : `Delete all ${examFilter} questions`}</button>
+                <MoreMenu className="danger-menu" title="Actions that cannot be undone" label="⋯">
+                  <button className="danger-button" disabled={busy || examCards.length === 0} onClick={() => void handleReset()}>{examFilter === ALL_EXAMS ? "Reset all labels" : `Reset ${examFilter} labels`}</button>
+                  <button className="danger-button danger-solid" disabled={busy || examCards.filter(canDeleteCard).length === 0} onClick={() => void handleRemove(examCards, "all")}>{examFilter === ALL_EXAMS ? "Delete all questions" : `Delete all ${examFilter} questions`}</button>
+                </MoreMenu>
               </div>
             </div>
-            <div className="library-tools"><input type="search" aria-label="Search question library" placeholder="Search questions, answers, notes, or tags" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
             <div className="card-list">
               {filteredCards.map((card) => {
                 const content = splitCardFront(card.front);
