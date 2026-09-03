@@ -1202,11 +1202,64 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 )}
               </article>
             ) : (
+              /* This is where the app explains itself. It shows only when there is
+                 nothing to study, which is exactly when someone does not know what to
+                 do, and it is gone for good once they act, so it costs nothing to
+                 anyone who already knows their way around. It names buttons that are
+                 on screen rather than describing concepts, and it offers the next step
+                 directly instead of telling you to go and find it. */
               <div className="empty-state">
-                <div className="empty-icon">✓</div>
-                <h2>{!cards.length ? "No questions yet" : studyMode === "mastery" ? allNotEasy.length ? "Build your next Mastery set" : "All questions mastered" : easyPool.length ? "Review mastered questions" : "No Easy questions yet"}</h2>
-                <p>{!cards.length ? "Capture a question page with the extension, then import its JSON file." : studyMode === "mastery" ? allNotEasy.length ? "Choose a set size and work every question until you have got it." : "Review what you know or reset all labels to begin another pass." : easyPool.length ? "Revisit what you have not been asked in longest, first." : "Mark questions as Got it before starting a review."}</p>
-                {!cards.length && <button className="primary" onClick={() => setView("import")}>Import a capture</button>}
+                {!cards.length ? (
+                  <>
+                    <div className="empty-icon">↥</div>
+                    <h2>No questions yet</h2>
+                    <p>Capture a question page with the extension, then import the file it saves.</p>
+                    <button className="primary" onClick={() => setView("import")}>Import a capture</button>
+                  </>
+                ) : studyMode === "mastery" ? (
+                  currentMasteryPool.length ? (
+                    <>
+                      <div className="empty-icon">◉</div>
+                      <h2>{currentMasteryPool.length} question{currentMasteryPool.length === 1 ? "" : "s"} waiting in your pool</h2>
+                      <p>Pick up where you left off, or add more before you start.</p>
+                      <button className="primary" onClick={() => startStudySession("mastery")}>Study current pool</button>
+                    </>
+                  ) : masteryAdditionsAvailable.length ? (
+                    <>
+                      <div className="empty-icon">◉</div>
+                      <h2>Build a pool, then work it down</h2>
+                      <ol className="empty-steps">
+                        <li>Your <strong>pool</strong> is the set you are drilling right now. It starts empty.</li>
+                        <li>Answer a question, reveal it, then say <strong>Got it</strong> or <strong>Not yet</strong>.</li>
+                        <li><strong>Got it</strong> retires a question. <strong>Not yet</strong> brings it round again. You are done when the pool is empty.</li>
+                      </ol>
+                      <div className="empty-actions">
+                        <button className="primary" onClick={() => addToMasteryPool(true)}>Add {Math.min(studySettings.masterySetSize, masteryAdditionsAvailable.length)} and start</button>
+                        <button className="secondary" onClick={() => setView("library")}>Pick questions myself</button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="empty-icon">✓</div>
+                      <h2>Nothing left to master</h2>
+                      <p>Every question here is marked Got it. Review them to keep them fresh, or reset your labels from the Library to make another pass.</p>
+                      {easyPool.length > 0 && <button className="primary" onClick={() => startStudySession("easy-review")}>Review what you know</button>}
+                    </>
+                  )
+                ) : easyPool.length ? (
+                  <>
+                    <div className="empty-icon">◉</div>
+                    <h2>{easyPool.length} question{easyPool.length === 1 ? "" : "s"} ready to review</h2>
+                    <p>Review asks what you have not seen in longest, first. Answer <strong>Not yet</strong> on anything shaky and it goes back into your Mastery pool.</p>
+                    <button className="primary" onClick={() => startStudySession("easy-review")}>Start review</button>
+                  </>
+                ) : (
+                  <>
+                    <div className="empty-icon">✓</div>
+                    <h2>Nothing to review yet</h2>
+                    <p>Questions arrive here once you mark them <strong>Got it</strong> in Mastery.</p>
+                  </>
+                )}
               </div>
             )}
           </section>

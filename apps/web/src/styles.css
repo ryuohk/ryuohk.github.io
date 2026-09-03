@@ -198,6 +198,13 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .empty-icon { width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; color: #087a55; background: #dcf8ee; font-size: 27px; }
 .empty-state h2 { margin-bottom: 4px; }
 .empty-state p { max-width: 440px; margin: 0 0 22px; color: #6d7a8f; }
+/* Left aligned inside a centred block: numbered steps are read, not scanned, and
+   centring them makes each line start in a different place. */
+.empty-steps { max-width: 460px; margin: 4px 0 22px; padding-left: 22px; color: #6d7a8f; font-size: 14px; line-height: 1.65; text-align: left; }
+.empty-steps li { margin-bottom: 9px; }
+.empty-steps li:last-child { margin-bottom: 0; }
+.empty-steps strong, .empty-state p strong { color: #35445c; }
+.empty-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
 
 .library { display: grid; gap: 16px; }
 .library-manager { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 16px 18px; border: 1px solid #dce3ed; border-radius: 13px; background: white; }
@@ -271,6 +278,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .progress-card div:last-child { border-right: 0; }
   .study-card, .empty-state { width: 100%; }
   .empty-state { min-height: min(430px, 55dvh); padding: 32px 20px; }
+  .empty-steps { padding-left: 20px; }
+  .empty-actions { width: 100%; }
+  .empty-actions button { min-height: 44px; flex: 1 1 150px; }
   .choices button, .reveal, .ratings button { min-height: 44px; }
   .exam-filter { flex: 1 1 100%; justify-content: space-between; }
   .exam-filter select { min-height: 40px; max-width: none; flex: 1; font-size: 16px; }
