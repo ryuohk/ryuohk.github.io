@@ -185,69 +185,150 @@ describe("rate and volume limits", () => {
 });
 
 /**
- * Pause and resume against a fake engine.
+ * A stand-in for the browser's speech engine.
  *
- * Real speech synthesis has no way to ask where it got to, so the module tracks the
- * sentence in flight itself. These tests drive that bookkeeping by completing
- * utterances by hand: nothing finishes until `finishCurrent` says so.
+ * It models the one thing these tests are about: an engine with a queue. Pieces handed
+ * to it wait their turn, the one at the head is playing and is the only one that
+ * reports progress, and nothing finishes until a test says so.
+ */
+class FakeUtterance {
+  text: string;
+  rate = 1;
+  pitch = 1;
+  volume = 1;
+  voice: unknown = null;
+  lang = "";
+  started = false;
+  onstart: (() => void) | null = null;
+  onend: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onboundary: ((event: { charIndex: number }) => void) | null = null;
+  constructor(text: string) {
+    this.text = text;
+  }
+}
+
+const spoken: FakeUtterance[] = [];
+let queue: FakeUtterance[] = [];
+
+/** Starts whatever has reached the head of the queue, as an engine would. */
+function pump() {
+  const head = queue[0];
+  if (head && !head.started) {
+    head.started = true;
+    head.onstart?.();
+  }
+}
+
+function installFakeEngine() {
+  spoken.length = 0;
+  queue = [];
+  (globalThis as Record<string, unknown>).window = {
+    speechSynthesis: {
+      speak(utterance: FakeUtterance) {
+        spoken.push(utterance);
+        queue.push(utterance);
+        pump();
+      },
+      cancel() {
+        queue = [];
+      },
+      resume() {},
+      pause() {},
+      getVoices: () => [],
+      addEventListener() {},
+      removeEventListener() {},
+    },
+  };
+  (globalThis as Record<string, unknown>).SpeechSynthesisUtterance = FakeUtterance;
+}
+
+const originalWindow = (globalThis as Record<string, unknown>).window;
+const originalUtterance = (globalThis as Record<string, unknown>).SpeechSynthesisUtterance;
+
+function restoreEngine() {
+  cancelSpeech();
+  (globalThis as Record<string, unknown>).window = originalWindow;
+  (globalThis as Record<string, unknown>).SpeechSynthesisUtterance = originalUtterance;
+}
+
+/** Completes the piece that is playing and lets the next one start. */
+function finishCurrent() {
+  queue.shift()?.onend?.();
+  pump();
+}
+
+/** Reports that the playing piece has reached `charIndex`, as a boundary event does. */
+function reachChar(charIndex: number) {
+  queue[0]?.onboundary?.({ charIndex });
+}
+
+const texts = () => spoken.map((utterance) => utterance.text);
+
+// Long enough to be split, which is the only case any of this matters in.
+const sentence = (label: string) =>
+  `${label} sentence in a question long enough that a browser would otherwise truncate it partway through.`;
+const question = [sentence("First"), sentence("Second"), sentence("Third"), sentence("Fourth")].join(" ");
+
+/**
+ * Queueing ahead of the piece that is playing.
+ *
+ * Asking for the next piece only once the last one has reported finishing puts a
+ * JavaScript round trip in the middle of every sentence, which is audible. Handing the
+ * engine the next pieces in advance lets it make the transition itself.
+ */
+describe("queueing ahead", () => {
+  beforeEach(installFakeEngine);
+  afterEach(restoreEngine);
+
+  it("hands over more than the piece that is playing", () => {
+    speakText(question);
+    expect(spoken.length).toBeGreaterThan(1);
+    expect(texts()).toEqual(chunkForSpeech(question).slice(0, spoken.length));
+  });
+
+  it("tops the queue back up as pieces finish", () => {
+    speakText(question);
+    const queuedUpFront = spoken.length;
+    finishCurrent();
+
+    expect(spoken.length).toBe(queuedUpFront + 1);
+  });
+
+  it("never hands over more than the question has", () => {
+    const short = "One short line.";
+    speakText(short);
+    expect(texts()).toEqual(chunkForSpeech(short));
+  });
+
+  it("plays every piece exactly once, in order", () => {
+    speakText(question);
+    for (let guard = 0; isSpeaking() && guard < 50; guard += 1) finishCurrent();
+
+    expect(texts()).toEqual(chunkForSpeech(question));
+    expect(isSpeaking()).toBe(false);
+  });
+
+  it("carries on past a piece the engine fails on", () => {
+    speakText(question);
+    queue.shift()?.onerror?.();
+    pump();
+    for (let guard = 0; isSpeaking() && guard < 50; guard += 1) finishCurrent();
+
+    expect(texts()).toEqual(chunkForSpeech(question));
+  });
+});
+
+/**
+ * Pause and resume.
+ *
+ * Speech synthesis has no way to ask where it got to, so the module tracks the piece
+ * being played itself. With pieces queued ahead, that is not the same as the piece
+ * handed over most recently, which is what these tests pin down.
  */
 describe("pause and resume", () => {
-  class FakeUtterance {
-    text: string;
-    rate = 1;
-    pitch = 1;
-    volume = 1;
-    voice: unknown = null;
-    lang = "";
-    onend: (() => void) | null = null;
-    onerror: (() => void) | null = null;
-    onboundary: ((event: { charIndex: number }) => void) | null = null;
-    constructor(text: string) {
-      this.text = text;
-    }
-  }
-
-  const spoken: FakeUtterance[] = [];
-  let queue: FakeUtterance[] = [];
-  const originalWindow = (globalThis as Record<string, unknown>).window;
-  const originalUtterance = (globalThis as Record<string, unknown>).SpeechSynthesisUtterance;
-
-  function finishCurrent() {
-    queue.shift()?.onend?.();
-  }
-
-  // Long enough that it has to be split, which is the only case pausing matters in.
-  const sentence = (label: string) =>
-    `${label} sentence in a question long enough that a browser would otherwise truncate it partway through.`;
-  const question = [sentence("First"), sentence("Second"), sentence("Third"), sentence("Fourth")].join(" ");
-
-  beforeEach(() => {
-    spoken.length = 0;
-    queue = [];
-    (globalThis as Record<string, unknown>).window = {
-      speechSynthesis: {
-        speak(utterance: FakeUtterance) {
-          spoken.push(utterance);
-          queue.push(utterance);
-        },
-        cancel() {
-          queue = [];
-        },
-        resume() {},
-        pause() {},
-        getVoices: () => [],
-        addEventListener() {},
-        removeEventListener() {},
-      },
-    };
-    (globalThis as Record<string, unknown>).SpeechSynthesisUtterance = FakeUtterance;
-  });
-
-  afterEach(() => {
-    cancelSpeech();
-    (globalThis as Record<string, unknown>).window = originalWindow;
-    (globalThis as Record<string, unknown>).SpeechSynthesisUtterance = originalUtterance;
-  });
+  beforeEach(installFakeEngine);
+  afterEach(restoreEngine);
 
   it("stops speaking and reports that it is paused", () => {
     speakText(question);
@@ -258,35 +339,36 @@ describe("pause and resume", () => {
     expect(isSpeaking()).toBe(false);
   });
 
-  it("picks up at the sentence that was interrupted", () => {
+  it("picks up at the piece playing, not the one queued furthest ahead", () => {
     speakText(question);
     finishCurrent();
-    const interrupted = spoken[1].text;
+    const playing = queue[0].text;
+    expect(playing).toBe(chunkForSpeech(question)[1]);
 
     pauseSpeech();
-    const countAtPause = spoken.length;
+    const before = spoken.length;
     expect(resumeSpeech()).toBe(true);
-    expect(spoken[countAtPause].text).toBe(interrupted);
+    expect(spoken[before].text).toBe(playing);
     expect(isPaused()).toBe(false);
   });
 
   it("ignores an end event that arrives after the pause", () => {
     speakText(question);
     pauseSpeech();
-    const countAtPause = spoken.length;
+    const before = spoken.length;
     finishCurrent();
 
-    expect(spoken).toHaveLength(countAtPause);
+    expect(spoken).toHaveLength(before);
   });
 
   it("still reaches the end of the question after a pause", () => {
     speakText(question);
+    finishCurrent();
     pauseSpeech();
     resumeSpeech();
     for (let guard = 0; isSpeaking() && guard < 50; guard += 1) finishCurrent();
 
-    const heard = spoken.map((utterance) => utterance.text);
-    for (const chunk of chunkForSpeech(question)) expect(heard).toContain(chunk);
+    for (const chunk of chunkForSpeech(question)) expect(texts()).toContain(chunk);
     expect(isSpeaking()).toBe(false);
   });
 
@@ -306,127 +388,97 @@ describe("pause and resume", () => {
 });
 
 /**
- * Resuming from the word being spoken rather than the top of the sentence.
+ * Resuming from the word being spoken rather than the top of the piece.
  *
- * `boundary` events are the only progress an engine reports. Where they arrive, a
- * pause or a speed change costs a word; where they do not, some Android voices among
- * them, the sentence repeats and nothing is lost but time.
+ * `boundary` events are the only progress an engine reports. Where they arrive, a pause
+ * or a speed change costs a word; where they do not, some Android voices among them,
+ * the piece repeats and nothing is lost but a few seconds.
  */
 describe("resuming from the reported position", () => {
-  class FakeUtterance {
-    text: string;
-    rate = 1;
-    pitch = 1;
-    volume = 1;
-    voice: unknown = null;
-    lang = "";
-    onend: (() => void) | null = null;
-    onerror: (() => void) | null = null;
-    onboundary: ((event: { charIndex: number }) => void) | null = null;
-    constructor(text: string) {
-      this.text = text;
-    }
-  }
+  beforeEach(installFakeEngine);
+  afterEach(restoreEngine);
 
-  const spoken: FakeUtterance[] = [];
-  let queue: FakeUtterance[] = [];
-  const originalWindow = (globalThis as Record<string, unknown>).window;
-  const originalUtterance = (globalThis as Record<string, unknown>).SpeechSynthesisUtterance;
-
-  const question = "Contoso needs a resilient design across two regions with an automatic failover path.";
-
-  beforeEach(() => {
-    spoken.length = 0;
-    queue = [];
-    (globalThis as Record<string, unknown>).window = {
-      speechSynthesis: {
-        speak(utterance: FakeUtterance) {
-          spoken.push(utterance);
-          queue.push(utterance);
-        },
-        cancel() {
-          queue = [];
-        },
-        resume() {},
-        pause() {},
-        getVoices: () => [],
-        addEventListener() {},
-        removeEventListener() {},
-      },
-    };
-    (globalThis as Record<string, unknown>).SpeechSynthesisUtterance = FakeUtterance;
-  });
-
-  afterEach(() => {
-    cancelSpeech();
-    (globalThis as Record<string, unknown>).window = originalWindow;
-    (globalThis as Record<string, unknown>).SpeechSynthesisUtterance = originalUtterance;
-  });
+  const line = "Contoso needs a resilient design across two regions with an automatic failover path.";
 
   it("picks up at the word the engine last reported", () => {
-    speakText(question);
-    const spokenText = spoken[0].text;
-    const at = spokenText.indexOf("automatic");
-    queue[0].onboundary?.({ charIndex: at });
+    speakText(line);
+    const playing = spoken[0].text;
+    const at = playing.indexOf("automatic");
+    reachChar(at);
 
     pauseSpeech();
+    const before = spoken.length;
     resumeSpeech();
-    expect(spoken[1].text).toBe(spokenText.slice(at));
+    expect(spoken[before].text).toBe(playing.slice(at));
   });
 
   it("never resumes mid-word when the report lands inside one", () => {
-    speakText(question);
-    const spokenText = spoken[0].text;
-    const at = spokenText.indexOf("automatic") + 4;
-    queue[0].onboundary?.({ charIndex: at });
+    speakText(line);
+    const at = spoken[0].text.indexOf("automatic") + 4;
+    reachChar(at);
 
     pauseSpeech();
+    const before = spoken.length;
     resumeSpeech();
-    expect(spoken[1].text.startsWith("automatic")).toBe(true);
+    expect(spoken[before].text.startsWith("automatic")).toBe(true);
   });
 
   it("applies a speed change from the reported position too", () => {
     let rate = 1;
-    speakText(question, () => ({ rate }));
-    const spokenText = spoken[0].text;
-    const at = spokenText.indexOf("resilient");
-    queue[0].onboundary?.({ charIndex: at });
+    speakText(line, () => ({ rate }));
+    const playing = spoken[0].text;
+    const at = playing.indexOf("resilient");
+    reachChar(at);
 
     rate = 1.6;
+    const before = spoken.length;
     applySpeechSettings();
-    expect(spoken[1].text).toBe(spokenText.slice(at));
-    expect(spoken[1].rate).toBe(1.6);
+    expect(spoken[before].text).toBe(playing.slice(at));
+    expect(spoken[before].rate).toBe(1.6);
   });
 
-  it("repeats the sentence when the engine reports nothing", () => {
+  it("repeats the piece when the engine reports nothing", () => {
+    speakText(line);
+    const playing = spoken[0].text;
+
+    pauseSpeech();
+    const before = spoken.length;
+    resumeSpeech();
+    expect(spoken[before].text).toBe(playing);
+  });
+
+  it("ignores a report outside the piece rather than skipping content", () => {
+    speakText(line);
+    const playing = spoken[0].text;
+    reachChar(playing.length + 50);
+
+    pauseSpeech();
+    const before = spoken.length;
+    resumeSpeech();
+    expect(spoken[before].text).toBe(playing);
+  });
+
+  it("ignores a report from a piece that is only queued, not playing", () => {
     speakText(question);
-    const spokenText = spoken[0].text;
+    const chunks = chunkForSpeech(question);
+    // The second piece is waiting its turn; its progress must not move the first.
+    queue[1].onboundary?.({ charIndex: 40 });
 
     pauseSpeech();
+    const before = spoken.length;
     resumeSpeech();
-    expect(spoken[1].text).toBe(spokenText);
+    expect(spoken[before].text).toBe(chunks[0]);
   });
 
-  it("ignores a report outside the sentence rather than skipping content", () => {
+  it("starts each piece's progress from zero", () => {
     speakText(question);
-    const spokenText = spoken[0].text;
-    queue[0].onboundary?.({ charIndex: spokenText.length + 50 });
+    reachChar(40);
+    finishCurrent();
+    const playing = queue[0].text;
 
     pauseSpeech();
+    const before = spoken.length;
     resumeSpeech();
-    expect(spoken[1].text).toBe(spokenText);
-  });
-
-  it("starts each sentence's progress from zero", () => {
-    const long = `${question} ${question} ${question}`;
-    speakText(long);
-    queue[0].onboundary?.({ charIndex: 40 });
-    queue.shift()?.onend?.();
-
-    // Second sentence, untouched by the first sentence's reported position.
-    const second = spoken[1].text;
-    pauseSpeech();
-    resumeSpeech();
-    expect(spoken[2].text).toBe(second);
+    expect(spoken[before].text).toBe(playing);
   });
 });

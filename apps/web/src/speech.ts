@@ -29,6 +29,25 @@ const MAX_CHUNK_CHARS = 180;
  */
 const TARGET_CHUNK_CHARS = 90;
 
+/**
+ * How many pieces are handed to the engine ahead of the one playing.
+ *
+ * Waiting for an `end` event before asking for the next piece puts a JavaScript round
+ * trip in the middle of every sentence, and that is the gap you hear. It is worst on a
+ * phone, where a voice may be synthesized over the network and the request only starts
+ * once the previous piece has already gone quiet. Queueing ahead lets the engine move
+ * from one piece to the next itself and gives it something to prepare in the meantime.
+ *
+ * There is no way to go further and render the audio in advance: the Web Speech API
+ * hands synthesized speech straight to the output and exposes no buffer to hold.
+ *
+ * The cost of a deeper queue is that a piece already handed over was built with the
+ * settings of a moment ago, so a speed change made now is not heard until the queue
+ * drains to it. That is why releasing a slider restarts from the current word instead
+ * of waiting.
+ */
+const SPEECH_LOOKAHEAD = 2;
+
 export const SPEECH_RATE_MIN = 0.5;
 export const SPEECH_RATE_MAX = 2;
 export const DEFAULT_SPEECH_RATE = 1.1;
@@ -217,7 +236,10 @@ interface ActiveRun {
   chunks: string[];
   /** The chunk currently being spoken, which is what a settings change restarts. */
   speakingIndex: number;
+  /** The next piece to hand to the engine, which may be ahead of the one playing. */
   nextIndex: number;
+  /** Pieces given to the engine that have not reported finishing. */
+  pending: number;
   options: SpeechOptionsSource;
   /**
    * How far into the speaking chunk the engine has reached, from its `boundary`
@@ -277,26 +299,15 @@ function startSpeaking(chunks: string[], startIndex: number, options: SpeechOpti
 
   const token = speechToken;
   const synthesis = window.speechSynthesis;
-  const run: ActiveRun = { chunks, speakingIndex: startIndex, nextIndex: startIndex, options, spokenChars: 0 };
+  const run: ActiveRun = { chunks, speakingIndex: startIndex, nextIndex: startIndex, pending: 0, options, spokenChars: 0 };
   activeRun = run;
 
-  const speakNext = () => {
-    // A newer question, or a cancel, invalidates everything still queued here.
-    if (token !== speechToken) return;
-    if (run.nextIndex >= chunks.length) {
-      activeRun = null;
-      return;
-    }
-    run.speakingIndex = run.nextIndex;
-    run.nextIndex += 1;
-    run.spokenChars = 0;
-
-    // Read per chunk, so speed and volume changes apply without a restart.
+  const handOver = (index: number) => {
     const current = resolveSpeechOptions(options);
     const voice = current.voiceURI
       ? listSpeechVoices().find((candidate) => candidate.voiceURI === current.voiceURI)
       : undefined;
-    const utterance = new SpeechSynthesisUtterance(chunks[run.speakingIndex]);
+    const utterance = new SpeechSynthesisUtterance(chunks[index]);
     utterance.rate = clampRate(current.rate);
     utterance.pitch = current.pitch ?? 1;
     utterance.volume = clampVolume(current.volume);
@@ -304,25 +315,53 @@ function startSpeaking(chunks: string[], startIndex: number, options: SpeechOpti
       utterance.voice = voice;
       utterance.lang = voice.lang;
     }
-    utterance.onend = speakNext;
-    // Progress within the sentence, so a pause or a speed change can pick up near
-    // where it stopped. Guarded because a stale event must not move a newer run.
-    utterance.onboundary = (event) => {
+
+    // Which piece is actually playing, rather than which was queued last. With more
+    // than one waiting these are not the same, and pausing needs the playing one.
+    utterance.onstart = () => {
       if (token !== speechToken) return;
-      const index = event.charIndex;
-      if (typeof index === "number" && index > run.spokenChars) run.spokenChars = index;
+      run.speakingIndex = index;
+      run.spokenChars = 0;
     };
-    // Abandon the rest rather than stuttering through a broken engine.
-    utterance.onerror = () => undefined;
+    // Progress within the sentence, so a pause or a speed change can pick up near
+    // where it stopped. Ignored unless this is the piece currently playing.
+    utterance.onboundary = (event) => {
+      if (token !== speechToken || run.speakingIndex !== index) return;
+      const at = event.charIndex;
+      if (typeof at === "number" && at > run.spokenChars) run.spokenChars = at;
+    };
+
+    const finished = () => {
+      // A newer question, or a cancel, invalidates everything still queued here.
+      if (token !== speechToken) return;
+      run.pending -= 1;
+      fill();
+      if (run.pending <= 0 && run.nextIndex >= chunks.length) activeRun = null;
+    };
+    utterance.onend = finished;
+    // One piece the engine chokes on should cost that piece, not the rest of the
+    // question. A cancel also arrives here, and the token check has already caught it.
+    utterance.onerror = finished;
+
+    run.pending += 1;
     try {
       // Chrome can be left paused by a previous cancel, which silently swallows speech.
       synthesis.resume();
       synthesis.speak(utterance);
     } catch {
-      // Nothing useful to do; the question stays readable on screen.
+      run.pending -= 1;
     }
   };
-  speakNext();
+
+  /** Tops the engine's queue back up to the lookahead depth. */
+  const fill = () => {
+    while (token === speechToken && run.pending <= SPEECH_LOOKAHEAD && run.nextIndex < chunks.length) {
+      const index = run.nextIndex;
+      run.nextIndex += 1;
+      handOver(index);
+    }
+  };
+  fill();
 }
 
 export function speakText(text: string, options: SpeechOptionsSource = {}): void {
