@@ -47,6 +47,20 @@ function splitLongRun(sentence: string, maxChars: number): string[] {
   const pieces: string[] = [];
   let current = "";
   for (const word of sentence.split(/\s+/)) {
+    // A single token longer than the budget, a long URL or an identifier, has no
+    // whitespace to break on. Splitting it on character boundaries sounds worse than
+    // it reads, but the alternative is Chrome truncating it and never firing the
+    // `end` event that drives the rest of the question.
+    if (word.length > maxChars) {
+      if (current) {
+        pieces.push(current);
+        current = "";
+      }
+      for (let start = 0; start < word.length; start += maxChars) {
+        pieces.push(word.slice(start, start + maxChars));
+      }
+      continue;
+    }
     if (current && `${current} ${word}`.length > maxChars) {
       pieces.push(current);
       current = word;
