@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { signOut, type AuthState } from "./auth";
-import { shouldShowAnswerText, splitCapturedList, splitCardFront } from "./card-content";
+import { repairRunTogetherText, shouldShowAnswerText, splitCapturedList, splitCardFront } from "./card-content";
 import { DiscussionPanel } from "./DiscussionPanel";
 import { ALL_EXAMS, filterCardsByExam, listExamCodes } from "./exam-filter";
 import { EXAM_FILTER_KEY, SESSION_KEY, SETTINGS_KEY } from "./study-state";
@@ -176,7 +176,9 @@ function SyncBadge({ cloud }: { cloud: CloudSync }) {
   return <button className={`sync-badge ${cloud.phase}`} onClick={() => cloud.request()} title={cloud.error ?? undefined}>{label}</button>;
 }
 
-function CapturedText({ text, as: Element, className }: { text: string; as: CapturedTextElement; className?: string }) {
+function CapturedText({ text: raw, as: Element, className }: { text: string; as: CapturedTextElement; className?: string }) {
+  // Idempotent, so prose that came through splitCardFront already is unharmed.
+  const text = repairRunTogetherText(raw);
   const parts = splitCapturedList(text);
   if (parts.items.length === 0) return <Element className={className}>{text}</Element>;
   return (
@@ -875,56 +877,6 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                   </label>
                   {studySettings.speakQuestions && (
                     <>
-                      <label className="speech-rate">
-                        Speed
-                        <input
-                          type="range"
-                          min={SPEECH_RATE_MIN}
-                          max={SPEECH_RATE_MAX}
-                          step={0.1}
-                          value={studySettings.speechRate}
-                          onChange={(event) => setStudySettings((existing) => ({ ...existing, speechRate: Number(event.target.value) }))}
-                          onPointerUp={() => applySpeechSettings()}
-                          onKeyUp={() => applySpeechSettings()}
-                        />
-                        <span className="speech-rate-value">{studySettings.speechRate.toFixed(1)}×</span>
-                      </label>
-                      <label className="speech-rate">
-                        Volume
-                        <input
-                          type="range"
-                          min={SPEECH_VOLUME_MIN}
-                          max={SPEECH_VOLUME_MAX}
-                          step={0.05}
-                          value={studySettings.speechVolume}
-                          onChange={(event) => setStudySettings((existing) => ({ ...existing, speechVolume: Number(event.target.value) }))}
-                          onPointerUp={() => applySpeechSettings()}
-                          onKeyUp={() => applySpeechSettings()}
-                        />
-                        <span className="speech-rate-value">{Math.round(studySettings.speechVolume * 100)}%</span>
-                      </label>
-                      {voices.length > 0 && (
-                        <label className="speech-voice">
-                          Voice
-                          <select
-                            value={voiceURI}
-                            onChange={(event) => {
-                              setVoiceURI(event.target.value);
-                              try {
-                                if (event.target.value) localStorage.setItem(VOICE_KEY, event.target.value);
-                                else localStorage.removeItem(VOICE_KEY);
-                              } catch {
-                                // The choice simply will not persist; speech still works.
-                              }
-                            }}
-                          >
-                            <option value="">System default</option>
-                            {voices.map((voice) => (
-                              <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name} ({voice.lang})</option>
-                            ))}
-                          </select>
-                        </label>
-                      )}
                       <button
                         type="button"
                         className={speechPaused ? "primary compact" : "secondary compact"}
@@ -933,13 +885,73 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                       >
                         {speechPaused ? "▶ Play" : speechActive ? "❚❚ Pause" : "↻ Read again"}
                       </button>
-                      <button
-                        type="button"
-                        className="secondary compact"
-                        onClick={() => speakText("Speech is on. This is how questions will sound.", () => speechOptionsRef.current)}
-                      >
-                        Test voice
-                      </button>
+                      {/* Speed, volume and voice are set once and then never touched, so
+                          they sit behind a caret rather than taking a band of the screen
+                          above every question. */}
+                      <details className="speech-more">
+                        <summary title="Speech settings" aria-label="Speech settings">
+                          {studySettings.speechRate.toFixed(1)}× · {Math.round(studySettings.speechVolume * 100)}%
+                        </summary>
+                        <div className="speech-more-panel">
+                          <label className="speech-rate">
+                            Speed
+                            <input
+                              type="range"
+                              min={SPEECH_RATE_MIN}
+                              max={SPEECH_RATE_MAX}
+                              step={0.1}
+                              value={studySettings.speechRate}
+                              onChange={(event) => setStudySettings((existing) => ({ ...existing, speechRate: Number(event.target.value) }))}
+                              onPointerUp={() => applySpeechSettings()}
+                              onKeyUp={() => applySpeechSettings()}
+                            />
+                            <span className="speech-rate-value">{studySettings.speechRate.toFixed(1)}×</span>
+                          </label>
+                          <label className="speech-rate">
+                            Volume
+                            <input
+                              type="range"
+                              min={SPEECH_VOLUME_MIN}
+                              max={SPEECH_VOLUME_MAX}
+                              step={0.05}
+                              value={studySettings.speechVolume}
+                              onChange={(event) => setStudySettings((existing) => ({ ...existing, speechVolume: Number(event.target.value) }))}
+                              onPointerUp={() => applySpeechSettings()}
+                              onKeyUp={() => applySpeechSettings()}
+                            />
+                            <span className="speech-rate-value">{Math.round(studySettings.speechVolume * 100)}%</span>
+                          </label>
+                          {voices.length > 0 && (
+                            <label className="speech-voice">
+                              Voice
+                              <select
+                                value={voiceURI}
+                                onChange={(event) => {
+                                  setVoiceURI(event.target.value);
+                                  try {
+                                    if (event.target.value) localStorage.setItem(VOICE_KEY, event.target.value);
+                                    else localStorage.removeItem(VOICE_KEY);
+                                  } catch {
+                                    // The choice simply will not persist; speech still works.
+                                  }
+                                }}
+                              >
+                                <option value="">System default</option>
+                                {voices.map((voice) => (
+                                  <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name} ({voice.lang})</option>
+                                ))}
+                              </select>
+                            </label>
+                          )}
+                          <button
+                            type="button"
+                            className="secondary compact"
+                            onClick={() => speakText("Speech is on. This is how questions will sound.", () => speechOptionsRef.current)}
+                          >
+                            Test voice
+                          </button>
+                        </div>
+                      </details>
                     </>
                   )}
                 </div>
@@ -978,7 +990,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 <div className="card-meta">
                   {/* Counts mastery, not position. Unmastered cards are pushed back onto
                       the queue, so there is no stable position to count through. */}
-                  <span>{studySession && `${studySession.completed} of ${studySession.total} ${studySession.mode === "mastery" ? "mastered" : "reviewed"} · `}{currentCard.tags.join(" · ") || "Uncategorized"}</span>
+                  <span>{currentCard.tags.join(" · ") || "Uncategorized"}</span>
                   <span className={`mastery-label label-${ratingLabel(currentCard.masteryRating).toLowerCase()}`}>{ratingLabel(currentCard.masteryRating)}</span>
                 </div>
                 {studySession && (studySession.results.length > 0 || viewingHistory) && (
@@ -1028,7 +1040,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 ) : (
                   <div className="answer-panel">
                     <p className="answer-label">{answerWasCorrect === null ? "ANSWER" : answerWasCorrect ? "CORRECT" : "INCORRECT"}</p>
-                    {shouldShowAnswerText(currentCard.back, currentCard.answerImages.length) && <h3>{currentCard.back}</h3>}
+                    {shouldShowAnswerText(currentCard.back, currentCard.answerImages.length) && <h3>{repairRunTogetherText(currentCard.back)}</h3>}
                     {currentCard.answerImages.length > 0 && <div className="answer-images">{currentCard.answerImages.map((image) => <img key={image.src} src={image.dataUrl || image.src} alt={image.alt || "Answer diagram"} />)}</div>}
                     {currentCard.explanation && <CapturedText text={currentCard.explanation} as="p" />}
                     {currentQuestion?.discussion && <DiscussionPanel discussion={currentQuestion.discussion} expectedCount={currentQuestion.discussionCount} />}

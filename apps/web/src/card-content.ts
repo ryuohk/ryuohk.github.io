@@ -10,6 +10,27 @@ export interface CapturedList {
   tail: string;
 }
 
+/**
+ * Restores spaces the capture never had.
+ *
+ * Source pages run inline text together, so a question arrives as "an Azure
+ * subscription.You need to deploy" and both reads and sounds that way. The stored text
+ * is deliberately left as captured: a question's identity is a hash of its prompt, so
+ * repairing it at capture time would make every question a stranger to the copy already
+ * in the shared library and duplicate the lot. This runs on the way to the screen
+ * instead, which costs nothing and fixes what is already stored.
+ *
+ * Both rules require a lowercase letter or digit before the punctuation, so an acronym
+ * like U.S.A is left alone. ".NET" is excluded by name, being common enough here to be
+ * worth the exception.
+ */
+export function repairRunTogetherText(text: string): string {
+  return String(text ?? "")
+    .replace(/([a-z0-9])([.!?:;,])(?!NET\b)([A-Z])/g, "$1$2 $3")
+    // "HOTSPOT -You have" and "DRAG DROP -Match the" open a great many questions.
+    .replace(/(\s-)(?=[A-Z])/g, "$1 ");
+}
+
 const CAPTURED_LIST_MARKER = /\s*[✑•]\s*/;
 const CAPTURED_LIST_TAIL = /(?:What\b|Which\b|How\b|To meet\b|You need\b|The solution\b|The monitoring solution\b|Solution:|Box \d+:|Incorrect Answers:)/;
 
@@ -43,6 +64,18 @@ export function shouldShowAnswerText(back: string, answerImageCount: number): bo
   return !/^(?:[A-Z]\s*)+$/.test(normalized);
 }
 
+/**
+ * Applied to the pieces rather than the whole card, because the split above hunts for
+ * markers like ".To meet " that the repair would rewrite out from under it.
+ */
+function repaired(content: CardContent): CardContent {
+  return {
+    prompt: repairRunTogetherText(content.prompt),
+    context: repairRunTogetherText(content.context),
+    choices: content.choices.map(repairRunTogetherText),
+  };
+}
+
 export function splitCardFront(front: string): CardContent {
   const [rawPrompt, ...choiceBlocks] = front.split("\n\n");
   const choices = choiceBlocks.join("\n\n").split("\n").filter(Boolean);
@@ -52,22 +85,22 @@ export function splitCardFront(front: string): CardContent {
   const looksLikeCaseStudy = /(?:^|\n)(?:Introductory Info\n)?(?:HOTSPOT\s*-)?Case Study\s*-/i.test(promptWithoutControlText.slice(0, 500));
 
   if (looksLikeCaseStudy && markerIndex >= 1000) {
-    return {
+    return repaired({
       prompt: promptWithoutControlText.slice(markerIndex + marker.length).trim(),
       context: promptWithoutControlText.slice(0, markerIndex).trim(),
       choices,
-    };
+    });
   }
 
   const fallbackMarker = ".To meet ";
   const fallbackIndex = promptWithoutControlText.lastIndexOf(fallbackMarker);
   if (looksLikeCaseStudy && fallbackIndex >= promptWithoutControlText.length * 0.7) {
-    return {
+    return repaired({
       prompt: promptWithoutControlText.slice(fallbackIndex + 1).trim(),
       context: promptWithoutControlText.slice(0, fallbackIndex + 1).trim(),
       choices,
-    };
+    });
   }
 
-  return { prompt: promptWithoutControlText, context: "", choices };
+  return repaired({ prompt: promptWithoutControlText, context: "", choices });
 }
