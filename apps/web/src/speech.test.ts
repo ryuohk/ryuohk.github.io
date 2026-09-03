@@ -1,5 +1,17 @@
-import { describe, expect, it } from "vitest";
-import { buildQuestionSpeech, chunkForSpeech, clampRate, clampVolume, resolveSpeechOptions } from "./speech";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  buildQuestionSpeech,
+  cancelSpeech,
+  chunkForSpeech,
+  clampRate,
+  clampVolume,
+  isPaused,
+  isSpeaking,
+  pauseSpeech,
+  resolveSpeechOptions,
+  resumeSpeech,
+  speakText,
+} from "./speech";
 
 // Chrome truncates a single utterance at roughly 200 characters with no error, so
 // every chunk staying under the limit is the whole point of this module.
@@ -132,5 +144,125 @@ describe("rate and volume limits", () => {
     expect(clampRate(20)).toBe(2);
     expect(clampRate(0.01)).toBe(0.5);
     expect(clampRate(undefined)).toBe(1.1);
+  });
+});
+
+/**
+ * Pause and resume against a fake engine.
+ *
+ * Real speech synthesis has no way to ask where it got to, so the module tracks the
+ * sentence in flight itself. These tests drive that bookkeeping by completing
+ * utterances by hand: nothing finishes until `finishCurrent` says so.
+ */
+describe("pause and resume", () => {
+  class FakeUtterance {
+    text: string;
+    rate = 1;
+    pitch = 1;
+    volume = 1;
+    voice: unknown = null;
+    lang = "";
+    onend: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor(text: string) {
+      this.text = text;
+    }
+  }
+
+  const spoken: FakeUtterance[] = [];
+  let queue: FakeUtterance[] = [];
+  const originalWindow = (globalThis as Record<string, unknown>).window;
+  const originalUtterance = (globalThis as Record<string, unknown>).SpeechSynthesisUtterance;
+
+  function finishCurrent() {
+    queue.shift()?.onend?.();
+  }
+
+  // Long enough that it has to be split, which is the only case pausing matters in.
+  const sentence = (label: string) =>
+    `${label} sentence in a question long enough that a browser would otherwise truncate it partway through.`;
+  const question = [sentence("First"), sentence("Second"), sentence("Third"), sentence("Fourth")].join(" ");
+
+  beforeEach(() => {
+    spoken.length = 0;
+    queue = [];
+    (globalThis as Record<string, unknown>).window = {
+      speechSynthesis: {
+        speak(utterance: FakeUtterance) {
+          spoken.push(utterance);
+          queue.push(utterance);
+        },
+        cancel() {
+          queue = [];
+        },
+        resume() {},
+        pause() {},
+        getVoices: () => [],
+        addEventListener() {},
+        removeEventListener() {},
+      },
+    };
+    (globalThis as Record<string, unknown>).SpeechSynthesisUtterance = FakeUtterance;
+  });
+
+  afterEach(() => {
+    cancelSpeech();
+    (globalThis as Record<string, unknown>).window = originalWindow;
+    (globalThis as Record<string, unknown>).SpeechSynthesisUtterance = originalUtterance;
+  });
+
+  it("stops speaking and reports that it is paused", () => {
+    speakText(question);
+    expect(isSpeaking()).toBe(true);
+
+    expect(pauseSpeech()).toBe(true);
+    expect(isPaused()).toBe(true);
+    expect(isSpeaking()).toBe(false);
+  });
+
+  it("picks up at the sentence that was interrupted", () => {
+    speakText(question);
+    finishCurrent();
+    const interrupted = spoken[1].text;
+
+    pauseSpeech();
+    const countAtPause = spoken.length;
+    expect(resumeSpeech()).toBe(true);
+    expect(spoken[countAtPause].text).toBe(interrupted);
+    expect(isPaused()).toBe(false);
+  });
+
+  it("ignores an end event that arrives after the pause", () => {
+    speakText(question);
+    pauseSpeech();
+    const countAtPause = spoken.length;
+    finishCurrent();
+
+    expect(spoken).toHaveLength(countAtPause);
+  });
+
+  it("still reaches the end of the question after a pause", () => {
+    speakText(question);
+    pauseSpeech();
+    resumeSpeech();
+    for (let guard = 0; isSpeaking() && guard < 50; guard += 1) finishCurrent();
+
+    const heard = spoken.map((utterance) => utterance.text);
+    for (const chunk of chunkForSpeech(question)) expect(heard).toContain(chunk);
+    expect(isSpeaking()).toBe(false);
+  });
+
+  it("discards the paused run on a cancel, so a new question wins", () => {
+    speakText(question);
+    pauseSpeech();
+    cancelSpeech();
+
+    expect(isPaused()).toBe(false);
+    expect(resumeSpeech()).toBe(false);
+  });
+
+  it("reports failure rather than guessing when there is nothing to act on", () => {
+    expect(pauseSpeech()).toBe(false);
+    expect(resumeSpeech()).toBe(false);
   });
 });

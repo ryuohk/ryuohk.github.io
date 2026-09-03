@@ -194,10 +194,13 @@ interface ActiveRun {
 }
 
 let activeRun: ActiveRun | null = null;
+/** Retained across a pause so playback can pick up where it stopped. */
+let pausedRun: ActiveRun | null = null;
 
 export function cancelSpeech(): void {
   speechToken += 1;
   activeRun = null;
+  pausedRun = null;
   if (!isSpeechSupported()) return;
   try {
     window.speechSynthesis.cancel();
@@ -276,4 +279,34 @@ export function applySpeechSettings(): void {
 /** True while a question is mid-reading, so callers can skip pointless restarts. */
 export function isSpeaking(): boolean {
   return activeRun !== null;
+}
+
+/**
+ * Stops speaking but remembers the place.
+ *
+ * Deliberately not `speechSynthesis.pause()`, which is unreliable on Android and in
+ * some versions behaves like cancel, leaving no way to resume. Stopping and recording
+ * the sentence in flight works the same everywhere, at the cost of repeating that one
+ * sentence when playback resumes.
+ */
+export function pauseSpeech(): boolean {
+  const run = activeRun;
+  if (!run) return false;
+  const snapshot: ActiveRun = { ...run };
+  cancelSpeech();
+  pausedRun = snapshot;
+  return true;
+}
+
+/** Resumes from the sentence that was interrupted. False when nothing was paused. */
+export function resumeSpeech(): boolean {
+  const run = pausedRun;
+  if (!run) return false;
+  pausedRun = null;
+  startSpeaking(run.chunks, run.speakingIndex, run.options);
+  return true;
+}
+
+export function isPaused(): boolean {
+  return pausedRun !== null;
 }

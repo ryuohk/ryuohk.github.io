@@ -15,6 +15,9 @@ import {
   applySpeechSettings,
   buildQuestionSpeech,
   cancelSpeech,
+  pauseSpeech,
+  resumeSpeech,
+  isSpeaking,
   isSpeechSupported,
   listSpeechVoices,
   onVoicesReady,
@@ -474,6 +477,31 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     setNotice(`${additions.length} question${additions.length === 1 ? "" : "s"} added to the Mastery pool.`);
   }
 
+  /**
+   * Empties the Mastery pool.
+   *
+   * Scoped to the exam filter, because clearing while filtered to one exam should not
+   * quietly discard the pool you built for another. Ratings are left alone: the pool is
+   * a list of what you chose to drill, not a record of how well you know it, so
+   * clearing it costs you the selection and nothing else.
+   */
+  function clearMasteryPool() {
+    const scopedIds = examFilter === ALL_EXAMS ? null : new Set(examCards.map((card) => card.id));
+    const remaining = scopedIds ? studySettings.masteryCardIds.filter((id) => !scopedIds.has(id)) : [];
+    const removed = studySettings.masteryCardIds.length - remaining.length;
+    if (removed === 0) {
+      setNotice("The Mastery pool is already empty.");
+      return;
+    }
+    if (!window.confirm(`Remove ${removed} question${removed === 1 ? "" : "s"} from the Mastery pool? Your Again, Hard, Good and Easy labels are kept.`)) return;
+    setStudySettings((existing) => ({ ...existing, masteryCardIds: remaining }));
+    setStudySession((existing) => (existing?.mode === "mastery" ? null : existing));
+    cancelSpeech();
+    setSpeechPaused(false);
+    setRevealed(false);
+    setNotice(`Mastery pool cleared. ${removed} question${removed === 1 ? "" : "s"} removed.`);
+  }
+
   async function handleRating(rating: MasteryRatingValue) {
     if (!currentCard || !studySession) return;
     const now = new Date();
@@ -669,6 +697,8 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     }
   });
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [speechPaused, setSpeechPaused] = useState(false);
+  const [speechActive, setSpeechActive] = useState(false);
   useEffect(() => {
     const refresh = () => setVoices(listSpeechVoices());
     refresh();
@@ -685,6 +715,48 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   const speechOptionsRef = useRef({ rate: studySettings.speechRate, volume: studySettings.speechVolume, voiceURI: voiceURI || null });
   speechOptionsRef.current = { rate: studySettings.speechRate, volume: studySettings.speechVolume, voiceURI: voiceURI || null };
 
+  const currentSpeechText = useMemo(
+    () => currentCard && reviewContent
+      ? buildQuestionSpeech(reviewContent.prompt, splitCardFront(currentCard.front).choices, currentCard.questionImages.length)
+      : "",
+    [currentCard, reviewContent],
+  );
+
+  /**
+   * Whether a question is actually mid-reading.
+   *
+   * Speech ends on its own with no React-visible event, so a button labelled from the
+   * last click would say "Pause" long after the reading finished. Polling while the
+   * toggle is on is cheap and keeps the label honest.
+   */
+  useEffect(() => {
+    if (!studySettings.speakQuestions || !isSpeechSupported()) {
+      setSpeechActive(false);
+      return;
+    }
+    const tick = () => setSpeechActive(isSpeaking());
+    tick();
+    const timer = window.setInterval(tick, 400);
+    return () => window.clearInterval(timer);
+  }, [studySettings.speakQuestions, currentCard?.id, speechPaused]);
+
+  /** One button covering pause, resume, and replaying a question already read out. */
+  function toggleSpeechPlayback() {
+    if (speechPaused) {
+      // Resume picks up at the interrupted sentence. It returns false only if the run
+      // was discarded meanwhile, in which case reading the question again is better
+      // than the button doing nothing.
+      if (!resumeSpeech() && currentSpeechText) speakText(currentSpeechText, () => speechOptionsRef.current);
+      setSpeechPaused(false);
+      return;
+    }
+    if (pauseSpeech()) {
+      setSpeechPaused(true);
+      return;
+    }
+    if (currentSpeechText) speakText(currentSpeechText, () => speechOptionsRef.current);
+  }
+
   /**
    * Speaks whenever the question changes, and only then. Reveals, re-renders and
    * slider adjustments must not restart it.
@@ -692,8 +764,10 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   useEffect(() => {
     if (!studySettings.speakQuestions || !currentCard || !reviewContent || view !== "study") {
       cancelSpeech();
+      setSpeechPaused(false);
       return;
     }
+    setSpeechPaused(false);
     speakText(
       buildQuestionSpeech(reviewContent.prompt, splitCardFront(currentCard.front).choices, currentCard.questionImages.length),
       () => speechOptionsRef.current,
@@ -785,6 +859,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 {studyMode === "mastery" ? <>
                   {!studySession && <button className="primary compact" disabled={currentMasteryPool.length === 0} onClick={() => startStudySession("mastery")}>Study current pool</button>}
                   <button className={studySession ? "primary compact" : "secondary compact"} disabled={masteryAdditionsAvailable.length === 0} onClick={() => addToMasteryPool()}>{studySession ? "Add questions" : "Add questions to pool"}</button>
+                  <button className="secondary compact" disabled={currentMasteryPool.length === 0} onClick={() => clearMasteryPool()}>Clear pool</button>
                 </> : <button className="primary compact" disabled={easyPool.length === 0} onClick={() => startStudySession("easy-review")}>{studySession ? "Restart review" : "Start Easy review"}</button>}
                 {studySession && <button className="secondary compact" onClick={() => setStudySession(null)}>End session</button>}
               </div>
@@ -850,6 +925,14 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                           </select>
                         </label>
                       )}
+                      <button
+                        type="button"
+                        className={speechPaused ? "primary compact" : "secondary compact"}
+                        disabled={!currentSpeechText && !speechActive && !speechPaused}
+                        onClick={() => toggleSpeechPlayback()}
+                      >
+                        {speechPaused ? "▶ Play" : speechActive ? "❚❚ Pause" : "↻ Read again"}
+                      </button>
                       <button
                         type="button"
                         className="secondary compact"
