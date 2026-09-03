@@ -17,17 +17,20 @@
 const MAX_CHUNK_CHARS = 180;
 
 /**
- * Preferred length, well under the ceiling.
+ * Preferred length, just under the ceiling.
  *
- * Restarting the utterance in flight is the only way to apply a new speed or to resume
- * after a pause, so the piece being spoken is how far playback rewinds. At a normal
- * pace 90 characters is about five seconds, half of what the ceiling would cost. The
- * price of going lower is not processing: chunking is one pass over the string. It is
- * the seam between utterances, a short gap the engine inserts and a handoff that
- * depends on an `end` event firing, so more pieces means choppier speech and more
- * chances for a question to stop early.
+ * Every boundary between pieces is an audible gap. The engine needs a moment to start
+ * an utterance, and no amount of queueing ahead removes that entirely, so the only real
+ * control over how choppy a question sounds is how few pieces it is cut into. On a
+ * typical question 170 gives five seams; 90 gives thirteen, and that is plainly worse
+ * to listen to.
+ *
+ * This was briefly set to 90 for a different reason: a restart replays the piece in
+ * flight, so a shorter piece meant a shorter rewind on pause or a speed change. Reading
+ * the engine's boundary events made that argument mostly moot, because a restart now
+ * resumes at the word rather than the top of the piece. Fewer, longer pieces win.
  */
-const TARGET_CHUNK_CHARS = 90;
+const TARGET_CHUNK_CHARS = 170;
 
 /**
  * How many pieces are handed to the engine ahead of the one playing.
@@ -190,7 +193,13 @@ export function buildQuestionSpeech(prompt: string, choices: readonly string[], 
   if (imageCount > 0) {
     parts.push(imageCount === 1 ? "This question includes a diagram on screen." : `This question includes ${imageCount} diagrams on screen.`);
   }
-  const spokenChoices = choices.map((choice) => String(choice ?? "").trim()).filter(Boolean);
+  // Choices usually arrive with no closing punctuation, and several of them commonly
+  // end up in one utterance. Without a full stop the engine runs "the secondary region"
+  // straight into "B", so the pause between choices has to be put there deliberately.
+  const spokenChoices = choices
+    .map((choice) => String(choice ?? "").trim())
+    .filter(Boolean)
+    .map((choice) => (/[.!?:;,]$/.test(choice) ? choice : `${choice}.`));
   if (spokenChoices.length) parts.push("Choices.", ...spokenChoices);
   return parts.join("\n");
 }

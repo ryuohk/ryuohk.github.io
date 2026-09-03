@@ -18,7 +18,7 @@ import {
 // every chunk staying under the limit is the whole point of this module.
 const LIMIT = 180;
 // Pieces are packed to this; a single sentence may run to LIMIT before it is broken.
-const TARGET = 90;
+const TARGET = 170;
 
 describe("chunkForSpeech", () => {
   it("returns nothing for empty or whitespace text", () => {
@@ -75,13 +75,19 @@ describe("chunkForSpeech", () => {
     expect(chunks.length).toBeGreaterThan(1);
   });
 
-  // The piece in flight is how far a pause or a speed change rewinds, so short
-  // sentences are left as they are rather than packed up to the hard ceiling.
-  it("does not pack short sentences into ceiling-sized blocks", () => {
-    const chunks = chunkForSpeech("One short line here. Another short line here. A third short line here. A fourth short line here.");
+  // Every boundary between pieces is an audible gap, so a question should be cut into
+  // as few as the truncation ceiling allows rather than into tidy short lines.
+  it("packs short sentences together instead of speaking them separately", () => {
+    expect(chunkForSpeech("One short line here. Another short line here. A third short line here.")).toHaveLength(1);
+  });
 
-    expect(chunks.length).toBeGreaterThan(1);
-    for (const chunk of chunks) expect(chunk.length).toBeLessThanOrEqual(TARGET);
+  it("cuts a long question into a handful of pieces, not a dozen", () => {
+    const sentence = "The platform must ingest telemetry from twelve thousand devices. ";
+    const chunks = chunkForSpeech(sentence.repeat(8));
+
+    // Two of these fit in a piece, so eight sentences make four, not eight.
+    expect(chunks).toHaveLength(4);
+    for (const chunk of chunks) expect(chunk.length).toBeLessThanOrEqual(LIMIT);
   });
 
   // "A." is a label, not a sentence. Splitting there strands the letter on the end of
@@ -92,9 +98,10 @@ describe("chunkForSpeech", () => {
       "B. Azure Synapse dedicated SQL pools replicated nightly",
     ]));
 
-    expect(chunks.some((chunk) => chunk.startsWith("A. Azure Data Explorer"))).toBe(true);
-    expect(chunks.some((chunk) => chunk.startsWith("B. Azure Synapse"))).toBe(true);
-    for (const chunk of chunks) expect(chunk.endsWith("A.")).toBe(false);
+    expect(chunks.join(" ")).toContain("A. Azure Data Explorer");
+    expect(chunks.join(" ")).toContain("B. Azure Synapse");
+    // A piece ending on a bare label puts the letter and its choice either side of a gap.
+    for (const chunk of chunks) expect(/(?:^|\s)[A-Z][.]$/.test(chunk)).toBe(false);
   });
 
   it("still ends a sentence on an ordinary word", () => {
@@ -102,10 +109,11 @@ describe("chunkForSpeech", () => {
     expect(chunkForSpeech("Overview:\nContoso runs two datacenters.").length).toBeGreaterThan(0);
   });
 
-  it("keeps a long sentence whole rather than breaking it mid-clause", () => {
-    // Between the target and the ceiling: a break here would land on no punctuation.
-    const sentence = "You must design a solution that meets every technical requirement without increasing the monthly cost.";
+  it("keeps a sentence with no clause punctuation whole up to the ceiling", () => {
+    // Over the packing target but under the ceiling, and with nowhere good to break.
+    const sentence = `${"word ".repeat(35).trim()}.`;
     expect(sentence.length).toBeGreaterThan(TARGET);
+    expect(sentence.length).toBeLessThanOrEqual(LIMIT);
     expect(chunkForSpeech(sentence)).toEqual([sentence]);
   });
 });
@@ -125,6 +133,14 @@ describe("buildQuestionSpeech", () => {
 
   it("says nothing about diagrams when there are none", () => {
     expect(buildQuestionSpeech("Plain question.", ["A. One"])).not.toContain("diagram");
+  });
+
+  // Several choices commonly share one utterance, and without a full stop the engine
+  // runs the end of one straight into the letter of the next.
+  it("closes each choice so the engine pauses between them", () => {
+    const spoken = buildQuestionSpeech("Which service?", ["A. Private endpoint", "B. Public endpoint."]);
+    expect(spoken).toContain("A. Private endpoint.");
+    expect(spoken).not.toContain("endpoint..");
   });
 
   it("omits the choices section when a question has none", () => {
