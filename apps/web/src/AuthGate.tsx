@@ -90,6 +90,26 @@ function NotInvited({ email }: { email: string | null }) {
   );
 }
 
+/**
+ * Deliberately distinct from "not invited". Reporting a failed lookup as a missing
+ * invitation sends people to check a list that was never the problem.
+ */
+function MembershipFailed({ detail, email }: { detail?: string; email: string | null }) {
+  return (
+    <Shell>
+      <h1>Could not check your access</h1>
+      <p>
+        {email ? <strong>{email}</strong> : "You"} signed in successfully, but CramBot could not confirm your library
+        membership. This is a fault on the library side, not a problem with your invitation.
+      </p>
+      {detail && <p className="auth-error">{detail}</p>}
+      <button className="secondary" onClick={() => window.location.reload()}>
+        Try again
+      </button>
+    </Shell>
+  );
+}
+
 export function AuthGate({ children }: { children: (auth: AuthState) => ReactNode }) {
   const auth = useAuthState();
 
@@ -102,6 +122,7 @@ export function AuthGate({ children }: { children: (auth: AuthState) => ReactNod
   }
   if (auth.status === "signed-out") return <SignIn />;
   if (auth.status === "unauthorized") return <NotInvited email={auth.email} />;
+  if (auth.status === "error") return <MembershipFailed detail={auth.error} email={auth.email} />;
 
   return <>{children(auth)}</>;
 }

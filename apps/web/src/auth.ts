@@ -12,11 +12,15 @@ export type AuthStatus =
   | "signed-out"
   /** Signed in, but the address is not on the invite list. */
   | "unauthorized"
+  /** Signed in, but the membership lookup itself failed. Not the same as uninvited. */
+  | "error"
   /** Signed in and invited. */
   | "ready";
 
 export interface AuthState {
   status: AuthStatus;
+  /** Why the membership lookup failed, when status is "error". */
+  error?: string;
   session: Session | null;
   email: string | null;
   userId: string | null;
@@ -26,6 +30,17 @@ export interface AuthState {
 
 const SIGNED_OUT: AuthState = { status: "signed-out", session: null, email: null, userId: null, isOwner: false };
 
+/** Distinguishes a schema or permission fault from simply not being invited. */
+function describeMembershipError(error: unknown): string {
+  const detail = error as { code?: unknown; message?: unknown };
+  const code = typeof detail?.code === "string" ? detail.code : "";
+  const message = typeof detail?.message === "string" ? detail.message : "Unknown error";
+  if (code === "42703") {
+    return "The library database is missing a column this version of CramBot expects. It needs its pending migration applied.";
+  }
+  return message;
+}
+
 async function resolveMembership(session: Session | null): Promise<AuthState> {
   if (!session || !supabase) return SIGNED_OUT;
   const email = session.user.email ?? null;
@@ -33,18 +48,27 @@ async function resolveMembership(session: Session | null): Promise<AuthState> {
 
   // The membership row is created by a database trigger for invited addresses only.
   // Row level security means an uninvited account simply reads nothing back.
+  //
+  // `select("*")` rather than naming columns on purpose: naming a column the schema
+  // has not caught up with yet fails the whole query, and an absent membership row
+  // and a failed lookup are indistinguishable from the result alone. That once
+  // reported a missing column as "not on the invite list", which sent the reader
+  // hunting through their invite list for a problem that was never there.
   const { data, error } = await supabase
     .from("library_members")
-    .select("user_id,role")
+    .select("*")
     .eq("user_id", session.user.id)
     .maybeSingle();
 
   if (error) {
     // A network failure should not lock out an already-signed-in user offline.
     if (!navigator.onLine) return { ...base, status: "ready" };
-    return { ...base, status: "unauthorized" };
+    return { ...base, status: "error", error: describeMembershipError(error) };
   }
-  return { ...base, status: data ? "ready" : "unauthorized", isOwner: data?.role === "owner" };
+  // `role` may be absent on a database that predates ownership; treat that as a
+  // member rather than failing, since the policies are the real authority anyway.
+  const role = (data as { role?: unknown } | null)?.role;
+  return { ...base, status: data ? "ready" : "unauthorized", isOwner: role === "owner" };
 }
 
 export function useAuthState(): AuthState {
