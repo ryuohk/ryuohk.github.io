@@ -133,6 +133,37 @@ function CapturedText({ text, as: Element, className }: { text: string; as: Capt
   );
 }
 
+/**
+ * A whole-number field you can actually edit.
+ *
+ * Committing straight from onChange means an empty box is rejected, so selecting all
+ * and deleting snaps the old value back and the only way to change 20 to 5 is to
+ * edit around the digits. This keeps whatever is typed in a local draft, commits as
+ * soon as it parses, and on blur falls back to the last good value if the box was
+ * left empty or invalid.
+ */
+function CountField({ label, value, onCommit }: { label: string; value: number; onCommit: (next: number) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <label>
+      {label}
+      <input
+        type="number"
+        min={1}
+        step={1}
+        inputMode="numeric"
+        value={draft ?? String(value)}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          const next = Number(event.target.value);
+          if (event.target.value.trim() !== "" && Number.isFinite(next) && next >= 1) onCommit(Math.floor(next));
+        }}
+        onBlur={() => setDraft(null)}
+      />
+    </label>
+  );
+}
+
 export default function App({ auth }: { auth?: AuthState } = {}) {
   const restoredSession = useMemo(readStudySession, []);
   const [cards, setCards] = useState<StudyCard[]>([]);
@@ -516,18 +547,22 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 : "Review mastered questions once; relabel anything that needs more work."}</p>
               <div className="session-settings simplified-settings">
                 {studyMode === "mastery" ? <>
-                  <label>Questions in set<input type="number" min={1} step={1} value={studySettings.masterySetSize} onChange={(event) => {
-                    if (Number.isFinite(event.target.valueAsNumber) && event.target.valueAsNumber >= 1) setStudySettings((existing) => ({ ...existing, masterySetSize: Math.floor(event.target.valueAsNumber) }));
-                  }} /></label>
+                  <CountField
+                    label="Questions in set"
+                    value={studySettings.masterySetSize}
+                    onCommit={(masterySetSize) => setStudySettings((existing) => ({ ...existing, masterySetSize }))}
+                  />
                   <label>Include<select value={studySettings.masteryPool} onChange={(event) => setStudySettings((existing) => ({ ...existing, masteryPool: event.target.value as StudySettings["masteryPool"] }))}>
                     <option value="all-not-easy">All not Easy</option>
                     <option value="again-hard">Again + Hard only</option>
                   </select></label>
                   <span className="pool-count">{masteryPool.length} available</span>
                 </> : <>
-                  <label>Questions to review<input type="number" min={1} step={1} value={studySettings.easyReviewSize} onChange={(event) => {
-                    if (Number.isFinite(event.target.valueAsNumber) && event.target.valueAsNumber >= 1) setStudySettings((existing) => ({ ...existing, easyReviewSize: Math.floor(event.target.valueAsNumber) }));
-                  }} /></label>
+                  <CountField
+                    label="Questions to review"
+                    value={studySettings.easyReviewSize}
+                    onCommit={(easyReviewSize) => setStudySettings((existing) => ({ ...existing, easyReviewSize }))}
+                  />
                   <span className="pool-count">{easyPool.length} Easy</span>
                 </>}
                 <button className="primary compact" disabled={(studyMode === "mastery" ? masteryPool.length : easyPool.length) === 0} onClick={() => startStudySession()}>{studySession ? "Restart set" : studyMode === "mastery" ? "Start Mastery set" : "Start Easy review"}</button>
