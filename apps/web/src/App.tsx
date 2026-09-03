@@ -46,6 +46,7 @@ import {
   filterEasyReviewPool,
   filterMasteryPool,
   normalizeAnswerLabel,
+  planMasteryAdditions,
   selectMasteryAdditions,
   setSessionAnswer,
   shuffleItems,
@@ -617,6 +618,41 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     setStudySession((existing) => existing ? setSessionAnswer(existing, currentCard.id, [...selected]) : null);
   }
 
+  /**
+   * Puts hand-picked library questions into the Mastery pool.
+   *
+   * Picking from the library is how you drill a specific topic rather than whatever a
+   * random batch offers. Anything already marked Got it has its label cleared on the
+   * way in, because the pool sheds Got it questions on every sync and it would
+   * otherwise look added and then disappear. That is a change to your ratings, so the
+   * notice says how many, rather than it happening quietly.
+   */
+  async function handleAddSelectedToPool() {
+    if (selectedCards.length === 0) return;
+    const plan = planMasteryAdditions(selectedCards, studySettings.masteryCardIds);
+    setBusy(true);
+    try {
+      if (plan.unretire.length) setCards(await resetMasteryRatings(plan.unretire));
+      setStudySettings((existing) => ({
+        ...existing,
+        masteryCardIds: [...new Set([...existing.masteryCardIds, ...plan.add])],
+      }));
+      // A Mastery session already running takes them too, rather than making you
+      // finish the set before the questions you just chose appear.
+      setStudySession((existing) => (existing?.mode === "mastery" ? addCardsToMasterySession(existing, plan.add) : existing));
+      setSelectedCardIds(new Set());
+      const parts = [`${plan.add.length} question${plan.add.length === 1 ? "" : "s"} added to the Mastery pool.`];
+      if (plan.alreadyPooled.length) parts.push(`${plan.alreadyPooled.length} ${plan.alreadyPooled.length === 1 ? "was" : "were"} already in it.`);
+      if (plan.unretire.length) parts.push(`${plan.unretire.length} marked Got it ${plan.unretire.length === 1 ? "is" : "are"} now unrated so ${plan.unretire.length === 1 ? "it" : "they"} can be drilled again.`);
+      setNotice(parts.join(" "));
+      cloud.request();
+    } catch (error) {
+      setNotice(`Could not add to the Mastery pool: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleReset() {
     if (!examCards.length) return;
     const scope = examFilter === ALL_EXAMS ? "all exams" : examFilter;
@@ -634,7 +670,6 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
       const resetIds = new Set(examCards.map((card) => card.id));
       setStudySettings((existing) => ({
         ...existing,
-        masteryPool: "all-not-easy",
         masteryCardIds: existing.masteryCardIds.filter((cardId) => !resetIds.has(cardId)),
       }));
       setNotice(`Reset ${scope === "all exams" ? `${examCards.length} question labels across all exams` : `${examCards.length} ${scope} question labels`}. Start a new Mastery set when ready.`);
@@ -1166,6 +1201,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
               <div><strong>{examFilter === ALL_EXAMS ? `${cards.length} question${cards.length === 1 ? "" : "s"} in your library` : `${examCards.length} ${examFilter} question${examCards.length === 1 ? "" : "s"} (${cards.length} total)`}</strong><span>{selectedCardIds.size ? `${selectedCardIds.size} selected` : `${filteredCards.length} shown`}</span></div>
               <div className="library-bulk-actions">
                 <button className="secondary compact" disabled={busy || filteredCards.length === 0} onClick={toggleFilteredSelection}>{allFilteredSelected ? "Clear shown" : `Select shown (${filteredCards.length})`}</button>
+                <button className="primary compact" disabled={busy || selectedCards.length === 0} onClick={() => void handleAddSelectedToPool()}>Add to Mastery pool</button>
                 <button className="danger-button" disabled={busy || selectedCards.filter(canDeleteCard).length === 0} onClick={() => void handleRemove(selectedCards, "selected")}>Delete selected</button>
                 <button className="danger-button danger-solid" disabled={busy || examCards.filter(canDeleteCard).length === 0} onClick={() => void handleRemove(examCards, "all")}>{examFilter === ALL_EXAMS ? "Delete all questions" : `Delete all ${examFilter} questions`}</button>
               </div>

@@ -100,6 +100,39 @@ export function selectMasteryAdditions(
     .map((card) => card.id);
 }
 
+export interface MasteryAdditionPlan {
+  /** Not in the pool yet, so these are what actually joins it. */
+  add: string[];
+  /** Selected but already pooled. Harmless, and worth saying so rather than counting twice. */
+  alreadyPooled: string[];
+  /** Marked Got it, so their label has to be cleared or the pool will shed them again. */
+  unretire: string[];
+}
+
+/**
+ * Works out what adding a hand-picked set of questions to the Mastery pool involves.
+ *
+ * The pool holds what you have not got yet, and every sync strips anything marked Got
+ * it out of it. So a question you already know cannot simply be put back: its label has
+ * to go first, or it would appear to be added and then quietly vanish. Choosing a
+ * question from the library is a deliberate "drill this again", which is exactly what
+ * clearing the label means, but it is a change to your ratings and the caller is
+ * expected to say so rather than do it silently.
+ */
+export function planMasteryAdditions(
+  selected: readonly StudyCard[],
+  masteryCardIds: readonly string[],
+): MasteryAdditionPlan {
+  const pooled = new Set(masteryCardIds);
+  const plan: MasteryAdditionPlan = { add: [], alreadyPooled: [], unretire: [] };
+  for (const card of selected) {
+    if (card.masteryRating === MasteryRating.Easy) plan.unretire.push(card.id);
+    if (pooled.has(card.id)) plan.alreadyPooled.push(card.id);
+    else plan.add.push(card.id);
+  }
+  return plan;
+}
+
 export function updateMasteryCardIds(
   cardIds: readonly string[],
   cardId: string,

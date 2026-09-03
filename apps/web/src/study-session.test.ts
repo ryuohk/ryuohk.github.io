@@ -7,6 +7,7 @@ import {
   evaluateAnswer,
   filterEasyReviewPool,
   filterMasteryPool,
+  planMasteryAdditions,
   reviseStudyResult,
   selectMasteryAdditions,
   summarizeStudySession,
@@ -246,5 +247,63 @@ describe("revising an earlier answer", () => {
     const corrected = reviseStudyResult(again, 0, MasteryRating.Good);
 
     expect(corrected.results[0].answeredAt).toBe(again.results[0].answeredAt);
+  });
+});
+
+/**
+ * Hand-picking library questions into the Mastery pool.
+ *
+ * The pool holds what you have not got yet, and every sync strips Got it questions out
+ * of it, so one cannot simply be put back. Its label has to be cleared first or the
+ * question would appear to be added and then vanish on the next sync.
+ */
+describe("planning additions from the library", () => {
+  it("adds questions that are not in the pool yet", () => {
+    const plan = planMasteryAdditions([card("one"), card("two")], []);
+
+    expect(plan.add).toEqual(["one", "two"]);
+    expect(plan.alreadyPooled).toEqual([]);
+    expect(plan.unretire).toEqual([]);
+  });
+
+  it("counts a question already in the pool rather than adding it twice", () => {
+    const plan = planMasteryAdditions([card("pooled"), card("fresh")], ["pooled"]);
+
+    expect(plan.add).toEqual(["fresh"]);
+    expect(plan.alreadyPooled).toEqual(["pooled"]);
+  });
+
+  it("marks a Got it question for un-retiring, or the pool would shed it again", () => {
+    const plan = planMasteryAdditions([card("known", MasteryRating.Easy), card("shaky", MasteryRating.Again)], []);
+
+    expect(plan.add).toEqual(["known", "shaky"]);
+    expect(plan.unretire).toEqual(["known"]);
+  });
+
+  it("un-retires a Got it question that is somehow already pooled", () => {
+    // A pool clean would drop it on the next sync, so the label still has to go.
+    const plan = planMasteryAdditions([card("known", MasteryRating.Easy)], ["known"]);
+
+    expect(plan.add).toEqual([]);
+    expect(plan.alreadyPooled).toEqual(["known"]);
+    expect(plan.unretire).toEqual(["known"]);
+  });
+
+  it("leaves every other label alone", () => {
+    const plan = planMasteryAdditions([card("unrated"), card("notYet", MasteryRating.Again), card("oldGood", MasteryRating.Good)], []);
+    expect(plan.unretire).toEqual([]);
+  });
+
+  it("does nothing with an empty selection", () => {
+    expect(planMasteryAdditions([], ["pooled"])).toEqual({ add: [], alreadyPooled: [], unretire: [] });
+  });
+
+  it("survives the plan then a pool clean, which is where the label matters", () => {
+    const known = card("known", MasteryRating.Easy);
+    const plan = planMasteryAdditions([known], []);
+    // Without clearing the label the clean drops it straight back out.
+    expect(cleanMasteryCardIds([known], plan.add)).toEqual([]);
+    const cleared = { ...known, masteryRating: null };
+    expect(cleanMasteryCardIds([cleared], plan.add)).toEqual(["known"]);
   });
 });
