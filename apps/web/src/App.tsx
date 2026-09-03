@@ -220,7 +220,11 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   const handleRemoteChange = useCallback((result: SyncResult) => {
     // Library refreshes are silent on purpose. They happen on a timer while you are
     // mid-question, so they must never disturb the card you are looking at.
-    if (result.pulled > 0 || result.deleted > 0) {
+    if (result.refusedDeletions > 0) {
+      const count = result.refusedDeletions;
+      setNotice(`${count} question${count === 1 ? "" : "s"} could not be deleted because ${count === 1 ? "it was" : "they were"} contributed by someone else, so ${count === 1 ? "it has" : "they have"} been restored. Only the contributor or a library owner can remove ${count === 1 ? "it" : "them"}.`);
+    }
+    if (result.pulled > 0 || result.deleted > 0 || result.refusedDeletions > 0) {
       void Promise.all([listCards(), listQuestions()]).then(([storedCards, storedQuestions]) => {
         setCards(storedCards);
         setQuestions(storedQuestions);
@@ -300,6 +304,17 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
    * question; 1 is the answer just given, and so on through the results log.
    * Results are append-only, so an index into them is stable while browsing.
    */
+  /**
+   * Mirrors the database policy so the interface does not offer deletes that will be
+   * refused. Postgres remains the authority; this only keeps the buttons honest.
+   * A card with no recorded contributor is local-only or predates ownership tracking,
+   * and the server will decide on it either way.
+   */
+  const canDeleteCard = useCallback(
+    (card: StudyCard) => cloud.phase === "disabled" || auth?.isOwner || !card.createdBy || card.createdBy === auth?.userId,
+    [cloud.phase, auth?.isOwner, auth?.userId],
+  );
+
   const [historyStep, setHistoryStep] = useState(0);
   const historyIndex = studySession && historyStep > 0 ? studySession.results.length - historyStep : -1;
   const historyResult = historyIndex >= 0 ? studySession?.results[historyIndex] : undefined;
@@ -525,7 +540,15 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     });
   }
 
-  async function handleRemove(cardsToRemove: StudyCard[], scope: "single" | "selected" | "all") {
+  async function handleRemove(rawCardsToRemove: StudyCard[], scope: "single" | "selected" | "all") {
+    // Silently dropping questions you cannot delete would make bulk actions lie about
+    // what they did, so the ineligible ones are named rather than skipped quietly.
+    const cardsToRemove = rawCardsToRemove.filter(canDeleteCard);
+    const blocked = rawCardsToRemove.length - cardsToRemove.length;
+    if (blocked > 0 && cardsToRemove.length === 0) {
+      setNotice(`${blocked === 1 ? "That question was" : `Those ${blocked} questions were`} contributed by someone else, so only they or a library owner can delete ${blocked === 1 ? "it" : "them"}.`);
+      return;
+    }
     if (!cardsToRemove.length) return;
     const confirmation = scope === "all"
       ? examFilter === ALL_EXAMS
@@ -535,7 +558,8 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
         ? `Delete ${cardsToRemove.length} selected questions and their rating history?`
         : `Delete this question and its rating history?\n\n${splitCardFront(cardsToRemove[0].front).prompt.slice(0, 140)}`;
     const reach = cloud.phase === "disabled" ? "This cannot be undone." : "This removes the questions from the shared library for everyone.";
-    if (!window.confirm(`${confirmation}\n\n${reach}`)) return;
+    const skipped = blocked > 0 ? `\n\n${blocked} question${blocked === 1 ? "" : "s"} contributed by someone else will be kept.` : "";
+    if (!window.confirm(`${confirmation}\n\n${reach}${skipped}`)) return;
     setBusy(true);
     try {
       await removeCards(cardsToRemove);
@@ -784,8 +808,8 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
               <div><strong>{examFilter === ALL_EXAMS ? `${cards.length} question${cards.length === 1 ? "" : "s"} in your library` : `${examCards.length} ${examFilter} question${examCards.length === 1 ? "" : "s"} (${cards.length} total)`}</strong><span>{selectedCardIds.size ? `${selectedCardIds.size} selected` : `${filteredCards.length} shown`}</span></div>
               <div className="library-bulk-actions">
                 <button className="secondary compact" disabled={busy || filteredCards.length === 0} onClick={toggleFilteredSelection}>{allFilteredSelected ? "Clear shown" : `Select shown (${filteredCards.length})`}</button>
-                <button className="danger-button" disabled={busy || selectedCards.length === 0} onClick={() => void handleRemove(selectedCards, "selected")}>Delete selected</button>
-                <button className="danger-button danger-solid" disabled={busy || examCards.length === 0} onClick={() => void handleRemove(examCards, "all")}>{examFilter === ALL_EXAMS ? "Delete all questions" : `Delete all ${examFilter} questions`}</button>
+                <button className="danger-button" disabled={busy || selectedCards.filter(canDeleteCard).length === 0} onClick={() => void handleRemove(selectedCards, "selected")}>Delete selected</button>
+                <button className="danger-button danger-solid" disabled={busy || examCards.filter(canDeleteCard).length === 0} onClick={() => void handleRemove(examCards, "all")}>{examFilter === ALL_EXAMS ? "Delete all questions" : `Delete all ${examFilter} questions`}</button>
               </div>
             </div>
             <div className="library-tools"><input type="search" aria-label="Search question library" placeholder="Search questions, answers, notes, or tags" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
@@ -796,7 +820,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 return <article className={selected ? "selected" : ""} key={card.id}>
                   <label className="card-checkbox"><input type="checkbox" checked={selected} onChange={() => toggleSelection(card.id)} aria-label={`Select question: ${content.prompt}`} /></label>
                   <div className="library-card-content">
-                    <div className="library-card-meta"><span className="tag">{card.tags.join(" · ") || "Uncategorized"}</span><div className="library-card-actions"><span className={`mastery-label label-${ratingLabel(card.masteryRating).toLowerCase()}`}>{ratingLabel(card.masteryRating)}</span><button className="danger-link" disabled={busy} onClick={() => void handleRemove([card], "single")}>Delete</button></div></div>
+                    <div className="library-card-meta"><span className="tag">{card.tags.join(" · ") || "Uncategorized"}</span><div className="library-card-actions"><span className={`mastery-label label-${ratingLabel(card.masteryRating).toLowerCase()}`}>{ratingLabel(card.masteryRating)}</span><button className="danger-link" disabled={busy || !canDeleteCard(card)} title={canDeleteCard(card) ? undefined : "Only the person who contributed this question, or a library owner, can delete it."} onClick={() => void handleRemove([card], "single")}>Delete</button></div></div>
                     <CapturedText text={content.prompt} as="h3" /><p><strong>Answer:</strong> {card.back}</p>{card.notes && <p><strong>Notes:</strong> {card.notes}</p>}
                   </div>
                 </article>;

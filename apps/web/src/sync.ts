@@ -49,10 +49,12 @@ export interface SyncResult {
   deleted: number;
   /** True when the in-progress set was replaced by newer state from another device. */
   stateAdopted: boolean;
+  /** Questions this account was not allowed to delete, put back locally. */
+  refusedDeletions: number;
 }
 
 interface QuestionRow { id: string; data: CapturedQuestion; updated_at: string }
-interface CardRow { id: string; question_id: string; data: GeneratedCard; updated_at: string }
+interface CardRow { id: string; question_id: string; data: GeneratedCard; created_by: string | null; updated_at: string }
 export interface ProgressRow {
   card_id: string;
   mastery_rating: MasteryRating | null;
@@ -120,6 +122,17 @@ export function describeSyncError(problem: unknown): string {
 }
 
 /**
+ * A row-level security refusal, as opposed to a network or schema failure. Postgres
+ * reports it as 42501; PostgREST surfaces the same thing as PGRST301 on some paths.
+ */
+export function isPermissionDenied(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  const message = String((error as { message?: unknown }).message ?? "").toLowerCase();
+  return code === "42501" || code === "PGRST301" || message.includes("row-level security");
+}
+
+/**
  * Names the stage and the size of the page that failed. One rejected page aborts the
  * whole push, so the queue stops draining until that specific request is understood.
  */
@@ -161,7 +174,9 @@ export function chunkBySize<T>(items: T[], maxRows: number, maxBytes: number): T
 
 /** Splits a StudyCard into the half everyone shares and the half that stays private. */
 export function splitCard(card: StudyCard): { content: GeneratedCard; progress: Omit<ProgressRow, "updated_at"> } {
-  const { masteryRating, ratingUpdatedAt, updatedAt: _updatedAt, notes, feedbackFlags, schedule: _schedule, suspended: _suspended, ...content } = card as StudyCard & { schedule?: unknown; suspended?: boolean };
+  // createdBy is a column on the row, not part of the shared payload, so it is
+  // stripped here rather than being written into `data` where a pull would ignore it.
+  const { masteryRating, ratingUpdatedAt, updatedAt: _updatedAt, notes, feedbackFlags, createdBy: _createdBy, schedule: _schedule, suspended: _suspended, ...content } = card as StudyCard & { schedule?: unknown; suspended?: boolean };
   return {
     content,
     progress: {
@@ -174,7 +189,12 @@ export function splitCard(card: StudyCard): { content: GeneratedCard; progress: 
   };
 }
 
-export function joinCard(content: GeneratedCard, progress: ProgressRow | undefined, fallback: StudyCard | undefined): StudyCard {
+export function joinCard(
+  content: GeneratedCard,
+  progress: ProgressRow | undefined,
+  fallback: StudyCard | undefined,
+  createdBy?: string | null,
+): StudyCard {
   // Callers sometimes pass a local StudyCard as the content half. Strip the private
   // fields off it first, or a cleared note would survive by riding along in the spread.
   const {
@@ -183,6 +203,7 @@ export function joinCard(content: GeneratedCard, progress: ProgressRow | undefin
     updatedAt: _updatedAt,
     notes: _notes,
     feedbackFlags: _flags,
+    createdBy: _createdBy,
     schedule: _schedule,
     suspended: _suspended,
     ...shared
@@ -199,6 +220,8 @@ export function joinCard(content: GeneratedCard, progress: ProgressRow | undefin
     updatedAt: progress?.updated_at ?? fallback?.updatedAt ?? shared.createdAt,
     ...(notes ? { notes } : {}),
     ...(flags?.length ? { feedbackFlags: flags as StudyCard["feedbackFlags"] } : {}),
+    // A pull without a cards row carries no ownership, so keep what we already knew.
+    ...((createdBy ?? fallback?.createdBy) ? { createdBy: (createdBy ?? fallback?.createdBy) as string } : {}),
   };
 }
 
@@ -274,9 +297,11 @@ async function pushChanges(
   userId: string,
   pending: PendingEntry[],
   settle: (keys: string[]) => Promise<void>,
-): Promise<number> {
+): Promise<{ pushed: number; refused: string[] }> {
   const client = requireSupabase();
   let pushed = 0;
+  // Ids the server would not let this account delete, restored by the caller.
+  const refused: string[] = [];
 
   const { questionIds, cardIds, progressIds, reviewIds, deletedCardIds, deletedQuestionIds, superseded } =
     resolvePendingIntents(pending);
@@ -374,8 +399,22 @@ async function pushChanges(
           onConflict: "entity_type,entity_id",
           ignoreDuplicates: true,
         });
+      // A refusal here means the row belongs to someone else. Rather than retrying
+      // forever, or leaving this device quietly missing a question the library still
+      // has, put the content back and let the caller explain.
+      if (isPermissionDenied(tombstones.error)) {
+        refused.push(...page);
+        await settle(page.map((entityId) => `${kind}:${entityId}`));
+        continue;
+      }
       assertUploaded(`Recording ${entityType} deletions`, tombstones.error, page.length);
+
       const removal = await client.from(table).delete().in("id", page);
+      if (isPermissionDenied(removal.error)) {
+        refused.push(...page);
+        await settle(page.map((entityId) => `${kind}:${entityId}`));
+        continue;
+      }
       assertUploaded(`Deleting ${table}`, removal.error, page.length);
       pushed += page.length;
       await settle(page.map((entityId) => `${kind}:${entityId}`));
@@ -394,7 +433,7 @@ async function pushChanges(
     .map((entry) => entry.key);
   if (stale.length) await settle(stale);
 
-  return pushed;
+  return { pushed, refused };
 }
 
 // ---------------------------------------------------------------------------
@@ -428,7 +467,7 @@ async function pullChanges(userId: string): Promise<{ pulled: number; deleted: n
 
   const [questionRows, cardRows, progressRows, reviewRows, deletionRows] = await Promise.all([
     pullPage<QuestionRow>("questions", "id,data,updated_at", "updated_at", since, CONTENT_PAGE),
-    pullPage<CardRow>("cards", "id,question_id,data,updated_at", "updated_at", since, CONTENT_PAGE),
+    pullPage<CardRow>("cards", "id,question_id,data,created_by,updated_at", "updated_at", since, CONTENT_PAGE),
     pullPage<ProgressRow>(
       "card_progress",
       "card_id,mastery_rating,rating_updated_at,notes,feedback_flags,updated_at",
@@ -453,6 +492,7 @@ async function pullChanges(userId: string): Promise<{ pulled: number; deleted: n
 
   // A card whose content did not change but whose progress did still needs rebuilding.
   const contentById = new Map(cardRows.map((row) => [row.id, row.data]));
+  const ownerById = new Map(cardRows.map((row) => [row.id, row.created_by]));
   const touchedCardIds = new Set([...contentById.keys(), ...progressByCard.keys()]);
 
   const mergedCards: StudyCard[] = [];
@@ -462,7 +502,7 @@ async function pullChanges(userId: string): Promise<{ pulled: number; deleted: n
     // Progress arriving for a card this device has never seen is kept until the
     // card itself syncs; there is nothing to write yet.
     if (!content) continue;
-    mergedCards.push(joinCard(content, progressByCard.get(cardId), local));
+    mergedCards.push(joinCard(content, progressByCard.get(cardId), local, ownerById.get(cardId)));
   }
 
   const mergedQuestions = questionRows.map((row) => row.data);
@@ -532,10 +572,13 @@ export function syncNow(userId: string): Promise<SyncResult> {
   const run = (async () => {
     const pending = await listPending();
     // Only entries that made it upstream leave the queue, so a failed push retries.
-    const pushed = pending.length ? await pushChanges(userId, pending, clearPending) : 0;
+    const { pushed, refused } = pending.length
+      ? await pushChanges(userId, pending, clearPending)
+      : { pushed: 0, refused: [] as string[] };
+    if (refused.length) await restoreRefusedCards(userId, refused);
     const { pulled, deleted } = await pullChanges(userId);
     const stateAdopted = await syncStudyState(userId);
-    return { pushed, pulled, deleted, stateAdopted };
+    return { pushed, pulled, deleted, stateAdopted, refusedDeletions: refused.length };
   })();
 
   running = run;
@@ -543,6 +586,47 @@ export function syncNow(userId: string): Promise<SyncResult> {
     if (running === run) running = null;
   });
   return run;
+}
+
+/**
+ * Puts back questions this account was not allowed to delete.
+ *
+ * The local copy is already gone by the time the server refuses, so without this the
+ * device would silently disagree with the shared library until storage was cleared.
+ * The rows are fetched by id rather than waiting for a pull, because their
+ * `updated_at` is older than the watermark and a pull would never look at them again.
+ */
+async function restoreRefusedCards(userId: string, cardIds: readonly string[]): Promise<void> {
+  const client = requireSupabase();
+  const restored: StudyCard[] = [];
+
+  for (const page of chunk([...new Set(cardIds)], CONTENT_PAGE)) {
+    const cards = await client.from("cards").select("id,question_id,data,created_by,updated_at").in("id", page);
+    if (cards.error || !cards.data?.length) continue;
+
+    // Bring the person's own labels back with the content, so a refused delete does
+    // not quietly reset their mastery progress on those questions.
+    const progress = await client
+      .from("card_progress")
+      .select("card_id,mastery_rating,rating_updated_at,notes,feedback_flags,updated_at")
+      .eq("user_id", userId)
+      .in("card_id", page);
+    const progressByCard = new Map((progress.data ?? []).map((row) => [(row as ProgressRow).card_id, row as ProgressRow]));
+
+    for (const row of cards.data as CardRow[]) {
+      restored.push(joinCard(row.data, progressByCard.get(row.id), undefined, row.created_by));
+    }
+  }
+
+  // The questions behind them may have been pruned locally too.
+  const questionIds = [...new Set(restored.map((card) => card.questionId))];
+  const questions: CapturedQuestion[] = [];
+  for (const page of chunk(questionIds, CONTENT_PAGE)) {
+    const result = await client.from("questions").select("id,data").in("id", page);
+    if (!result.error) questions.push(...(result.data ?? []).map((row) => (row as QuestionRow).data));
+  }
+
+  if (restored.length || questions.length) await applyRemoteLibrary(questions, restored, []);
 }
 
 export async function pendingCount(): Promise<number> {

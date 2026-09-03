@@ -65,7 +65,7 @@ export function useCloudSync(userId: string | null, onRemoteChange: (result: Syn
         setPhase("idle");
         setLastSyncedAt(new Date().toISOString());
         setPending(await pendingCount());
-        if (result.pulled > 0 || result.deleted > 0 || result.stateAdopted) remoteChange.current(result);
+        if (result.pulled > 0 || result.deleted > 0 || result.stateAdopted || result.refusedDeletions > 0) remoteChange.current(result);
       } catch (problem) {
         if (!active) return;
         setError(describeSyncError(problem));

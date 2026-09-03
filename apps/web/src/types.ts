@@ -74,6 +74,12 @@ export interface StudyCard extends GeneratedCard {
   updatedAt: string;
   notes?: string;
   feedbackFlags?: Array<"unclear" | "wrong-answer" | "outdated">;
+  /**
+   * Who contributed this to the shared library, filled in by sync. Undefined for
+   * cards that only exist locally or predate ownership tracking; the interface
+   * treats those as deletable, and the database has the final say either way.
+   */
+  createdBy?: string;
 }
 
 export interface ReviewLog {

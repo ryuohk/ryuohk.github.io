@@ -20,20 +20,22 @@ export interface AuthState {
   session: Session | null;
   email: string | null;
   userId: string | null;
+  /** Library owners may delete anything; members only their own contributions. */
+  isOwner: boolean;
 }
 
-const SIGNED_OUT: AuthState = { status: "signed-out", session: null, email: null, userId: null };
+const SIGNED_OUT: AuthState = { status: "signed-out", session: null, email: null, userId: null, isOwner: false };
 
 async function resolveMembership(session: Session | null): Promise<AuthState> {
   if (!session || !supabase) return SIGNED_OUT;
   const email = session.user.email ?? null;
-  const base = { session, email, userId: session.user.id };
+  const base = { session, email, userId: session.user.id, isOwner: false };
 
   // The membership row is created by a database trigger for invited addresses only.
   // Row level security means an uninvited account simply reads nothing back.
   const { data, error } = await supabase
     .from("library_members")
-    .select("user_id")
+    .select("user_id,role")
     .eq("user_id", session.user.id)
     .maybeSingle();
 
@@ -42,7 +44,7 @@ async function resolveMembership(session: Session | null): Promise<AuthState> {
     if (!navigator.onLine) return { ...base, status: "ready" };
     return { ...base, status: "unauthorized" };
   }
-  return { ...base, status: data ? "ready" : "unauthorized" };
+  return { ...base, status: data ? "ready" : "unauthorized", isOwner: data?.role === "owner" };
 }
 
 export function useAuthState(): AuthState {
