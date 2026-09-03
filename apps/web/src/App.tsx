@@ -381,12 +381,15 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
         if (selection.library.studySettings) {
           const restored = selection.library.studySettings as Partial<StudySettings> & { questionCount?: number };
           const count = normalizeQuestionCount(restored.questionCount, studySettings.masterySetSize);
-          setStudySettings({
+          setStudySettings((existing) => ({
             masterySetSize: normalizeQuestionCount(restored.masterySetSize, count),
             masteryPool: restored.masteryPool === "again-hard" ? "again-hard" : "all-not-easy",
             easyReviewSize: normalizeQuestionCount(restored.easyReviewSize, count),
             masteryCardIds: normalizeCardIds(restored.masteryCardIds),
-          });
+            // A backup predating speech carries no preference, so keep this device's.
+            speakQuestions: restored.speakQuestions ?? existing.speakQuestions,
+            speechRate: normalizeSpeechRate(restored.speechRate ?? existing.speechRate),
+          }));
         }
         setNotice(`Restored ${selection.library.cards.length} questions and ${selection.library.reviews.length} rating records.`);
       } else {

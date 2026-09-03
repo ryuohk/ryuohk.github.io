@@ -20,6 +20,8 @@ const settings: StudySettings = {
   masteryPool: "all-not-easy",
   easyReviewSize: 2,
   masteryCardIds: [],
+  speakQuestions: false,
+  speechRate: 1.1,
 };
 
 function card(id: string, masteryRating: MasteryRatingValue | null = null, ratingUpdatedAt: string | null = null): StudyCard {
