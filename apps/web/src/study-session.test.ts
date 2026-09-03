@@ -7,6 +7,7 @@ import {
   evaluateAnswer,
   filterEasyReviewPool,
   filterMasteryPool,
+  reviseStudyResult,
   selectMasteryAdditions,
   summarizeStudySession,
   updateMasteryCardIds,
@@ -153,5 +154,79 @@ describe("mastery study sessions", () => {
     const completed = advanceStudySession(session, "one", MasteryRating.Easy, ["A"], ["A"], new Date("2026-08-28T12:00:08.000Z"));
 
     expect(summarizeStudySession(completed)).toMatchObject({ completed: 1, durationSeconds: 8, averageSeconds: 8, accuracy: 100 });
+  });
+});
+
+describe("revising an earlier answer", () => {
+  const pooled = { ...settings, masteryCardIds: ["one", "two"] };
+
+  it("brings a question back into the set when Easy is corrected downward", () => {
+    const session = createStudySession([card("one"), card("two")], pooled, "mastery", () => 0.99);
+    const mastered = advanceStudySession(session, session.queue[0], MasteryRating.Easy, [], []);
+    expect(mastered.completed).toBe(1);
+    expect(mastered.queue).not.toContain(session.queue[0]);
+
+    const corrected = reviseStudyResult(mastered, 0, MasteryRating.Again);
+    expect(corrected.results[0].rating).toBe(MasteryRating.Again);
+    expect(corrected.completed).toBe(0);
+    expect(corrected.queue).toContain(session.queue[0]);
+  });
+
+  it("removes a question from the set when it is raised to Easy", () => {
+    const session = createStudySession([card("one"), card("two")], pooled, "mastery", () => 0.99);
+    const first = session.queue[0];
+    const again = advanceStudySession(session, first, MasteryRating.Again, [], []);
+    expect(again.queue).toContain(first);
+
+    const corrected = reviseStudyResult(again, 0, MasteryRating.Easy);
+    expect(corrected.completed).toBe(1);
+    expect(corrected.queue).not.toContain(first);
+  });
+
+  it("leaves the queue alone when both ratings are below Easy", () => {
+    const session = createStudySession([card("one"), card("two")], pooled, "mastery", () => 0.99);
+    const again = advanceStudySession(session, session.queue[0], MasteryRating.Again, [], []);
+    const corrected = reviseStudyResult(again, 0, MasteryRating.Hard);
+
+    expect(corrected.queue).toEqual(again.queue);
+    expect(corrected.completed).toBe(again.completed);
+    expect(corrected.results[0].rating).toBe(MasteryRating.Hard);
+  });
+
+  it("never queues a duplicate when the question is already pending", () => {
+    const session = createStudySession([card("one"), card("two")], pooled, "mastery", () => 0.99);
+    const first = session.queue[0];
+    const again = advanceStudySession(session, first, MasteryRating.Again, [], []);
+    // Force the odd case of a completed result whose card is still queued.
+    const odd = { ...again, results: [{ ...again.results[0], rating: MasteryRating.Easy }], completed: 1 };
+
+    const corrected = reviseStudyResult(odd, 0, MasteryRating.Again);
+    expect(corrected.queue.filter((id) => id === first)).toHaveLength(1);
+  });
+
+  it("keeps queue membership unchanged in an Easy review, where every answer completes", () => {
+    const session = createStudySession([card("one", MasteryRating.Easy), card("two", MasteryRating.Easy)], settings, "easy-review");
+    const reviewed = advanceStudySession(session, session.queue[0], MasteryRating.Easy, [], []);
+    const corrected = reviseStudyResult(reviewed, 0, MasteryRating.Again);
+
+    expect(corrected.queue).toEqual(reviewed.queue);
+    expect(corrected.completed).toBe(reviewed.completed);
+    expect(corrected.results[0].rating).toBe(MasteryRating.Again);
+  });
+
+  it("ignores an unchanged rating and an index that does not exist", () => {
+    const session = createStudySession([card("one")], { ...settings, masteryCardIds: ["one"] }, "mastery");
+    const again = advanceStudySession(session, "one", MasteryRating.Again, [], []);
+
+    expect(reviseStudyResult(again, 0, MasteryRating.Again)).toBe(again);
+    expect(reviseStudyResult(again, 9, MasteryRating.Easy)).toBe(again);
+  });
+
+  it("preserves the original answer time so history keeps its order", () => {
+    const session = createStudySession([card("one")], { ...settings, masteryCardIds: ["one"] }, "mastery");
+    const again = advanceStudySession(session, "one", MasteryRating.Again, [], [], new Date("2026-08-28T12:00:05.000Z"));
+    const corrected = reviseStudyResult(again, 0, MasteryRating.Good);
+
+    expect(corrected.results[0].answeredAt).toBe(again.results[0].answeredAt);
   });
 });

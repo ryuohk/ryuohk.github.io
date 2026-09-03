@@ -115,6 +115,11 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .answer-label { margin: 0 0 5px; color: #07845d; font-size: 10px; font-weight: 800; letter-spacing: .12em; }
 .answer-panel h3 { margin: 0 0 8px; white-space: pre-wrap; }
 .answer-panel p { color: #526679; white-space: pre-wrap; overflow-wrap: anywhere; }
+.history-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 18px; }
+.history-nav button { min-height: 40px; white-space: nowrap; }
+.history-position { color: #6b7a90; font-size: 12px; font-weight: 700; text-align: center; }
+.history-note { margin: 0 0 20px; padding: 10px 14px; border: 1px solid #f0dcc2; border-radius: 10px; color: #7a5a2e; background: #fdf7ee; font-size: 13px; line-height: 1.5; }
+
 .captured-list { display: block; margin: .65em 0 0; padding-left: 1.25em; }
 .captured-list:first-child { margin-top: 0; }
 .captured-list-tail { display: block; margin-top: .65em; }

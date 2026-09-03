@@ -166,6 +166,43 @@ export function setSessionAnswer(session: StudySession, cardId: string, selected
   return { ...session, answers: { ...session.answers, [cardId]: [...selectedAnswers] } };
 }
 
+/**
+ * Replaces the rating on an already-answered question and repairs the queue.
+ *
+ * Reached by stepping back through history, usually to correct a misclick. The
+ * queue has to follow: a question re-rated below Easy was previously removed from
+ * the set and has to come back, and one raised to Easy has to leave. Ratings inside
+ * an Easy review never change queue membership, since every answer there completes.
+ *
+ * `answeredAt` is deliberately left alone so history keeps its original order and
+ * stepping back does not shuffle under you.
+ */
+export function reviseStudyResult(
+  session: StudySession,
+  resultIndex: number,
+  rating: MasteryRatingValue,
+): StudySession {
+  const previous = session.results[resultIndex];
+  if (!previous || previous.rating === rating) return session;
+
+  const results = session.results.map((result, index) => (index === resultIndex ? { ...result, rating } : result));
+  const wasCompleted = session.mode === "easy-review" || previous.rating === MasteryRating.Easy;
+  const nowCompleted = session.mode === "easy-review" || rating === MasteryRating.Easy;
+  if (wasCompleted === nowCompleted) return { ...session, results };
+
+  const inQueue = session.queue.includes(previous.cardId);
+  const queue = nowCompleted
+    ? session.queue.filter((cardId) => cardId !== previous.cardId)
+    : inQueue ? session.queue : [...session.queue, previous.cardId];
+
+  return {
+    ...session,
+    results,
+    queue,
+    completed: Math.max(0, session.completed + (nowCompleted ? 1 : -1)),
+  };
+}
+
 export function advanceStudySession(
   session: StudySession,
   cardId: string,

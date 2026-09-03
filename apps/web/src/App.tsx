@@ -21,6 +21,7 @@ import { prepareImportSelection } from "./importer";
 import {
   addCardsToMasterySession,
   advanceStudySession,
+  reviseStudyResult,
   cleanMasteryCardIds,
   createStudySession,
   evaluateAnswer,
@@ -294,16 +295,32 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
       active = false;
     };
   }, [view, extensionInfo]);
-  const currentCardId = studySession?.queue[0];
+  /**
+   * How many answers back from the live question we are looking. 0 is the live
+   * question; 1 is the answer just given, and so on through the results log.
+   * Results are append-only, so an index into them is stable while browsing.
+   */
+  const [historyStep, setHistoryStep] = useState(0);
+  const historyIndex = studySession && historyStep > 0 ? studySession.results.length - historyStep : -1;
+  const historyResult = historyIndex >= 0 ? studySession?.results[historyIndex] : undefined;
+  const viewingHistory = Boolean(historyResult);
+
+  const currentCardId = historyResult?.cardId ?? studySession?.queue[0];
   const currentCard = currentCardId ? cards.find((card) => card.id === currentCardId) : undefined;
   const currentQuestion = currentCard ? questionById.get(currentCard.questionId) : undefined;
   const correctAnswers = currentQuestion
     ? currentQuestion.correctAnswers.length ? currentQuestion.correctAnswers : currentQuestion.mostVotedAnswers
     : [];
-  const activeChoices = new Set(currentCard && studySession ? studySession.answers[currentCard.id] ?? [] : []);
+  // A past question shows the answers you gave then, not whatever is in the live
+  // answer map, which may since have been cleared for a repeat of the same card.
+  const activeChoices = new Set(
+    historyResult ? historyResult.selectedAnswers : currentCard && studySession ? studySession.answers[currentCard.id] ?? [] : [],
+  );
   const reviewContent = currentCard ? splitCardFront(currentCard.front) : null;
-  const answerWasCorrect = revealed ? evaluateAnswer([...activeChoices], correctAnswers) : null;
-  const sessionFinished = Boolean(studySession && studySession.queue.length === 0);
+  // History is always shown answered; there is nothing to reveal about it.
+  const showAnswer = revealed || viewingHistory;
+  const answerWasCorrect = showAnswer ? evaluateAnswer([...activeChoices], correctAnswers) : null;
+  const sessionFinished = Boolean(studySession && studySession.queue.length === 0 && !viewingHistory);
   const sessionSummary = studySession ? summarizeStudySession(studySession) : null;
 
   const filteredCards = useMemo(() => {
@@ -405,6 +422,18 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   async function handleRating(rating: MasteryRatingValue) {
     if (!currentCard || !studySession) return;
     const now = new Date();
+    /**
+     * A card's stored label reflects the most recent thing you said about it. When
+     * correcting an older answer for a card that was answered again later, the
+     * session result changes but the label must keep the later verdict.
+     */
+    const supersededByLaterAnswer = historyIndex >= 0
+      && studySession.results.some((result, index) => index > historyIndex && result.cardId === currentCard.id);
+    if (supersededByLaterAnswer) {
+      setStudySession((existing) => existing ? reviseStudyResult(existing, historyIndex, rating) : null);
+      cloud.request();
+      return;
+    }
     const updated: StudyCard = {
       ...currentCard,
       masteryRating: rating,
@@ -424,10 +453,15 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
         ...existing,
         masteryCardIds: updateMasteryCardIds(existing.masteryCardIds, currentCard.id, studySession.mode, rating),
       }));
-      setStudySession((existing) => existing
-        ? advanceStudySession(existing, currentCard.id, rating, [...activeChoices], correctAnswers, now)
-        : null);
-      setRevealed(false);
+      if (historyIndex >= 0) {
+        setStudySession((existing) => existing ? reviseStudyResult(existing, historyIndex, rating) : null);
+        // Stay on the corrected question rather than jumping away mid-correction.
+      } else {
+        setStudySession((existing) => existing
+          ? advanceStudySession(existing, currentCard.id, rating, [...activeChoices], correctAnswers, now)
+          : null);
+        setRevealed(false);
+      }
       cloud.request();
     } catch (error) {
       setNotice(`Could not save this rating: ${error instanceof Error ? error.message : String(error)}`);
@@ -537,17 +571,26 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     function handleKeyboard(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || target?.closest("button, input, select, textarea, summary")) return;
-      if (!revealed && currentCard && event.code === "Space") {
+      if (currentCard && (event.code === "ArrowLeft" || event.code === "ArrowRight")) {
+        event.preventDefault();
+        const total = studySession?.results.length ?? 0;
+        setHistoryStep((step) => (event.code === "ArrowLeft" ? Math.min(total, step + 1) : Math.max(0, step - 1)));
+        return;
+      }
+      if (!showAnswer && currentCard && event.code === "Space") {
         event.preventDefault();
         setRevealed(true);
         return;
       }
       const option = RATING_OPTIONS[Number(event.key) - 1];
-      if (revealed && option) void handleRating(option.value);
+      if (showAnswer && option) void handleRating(option.value);
     }
     document.addEventListener("keydown", handleKeyboard);
     return () => document.removeEventListener("keydown", handleKeyboard);
-  }, [currentCard, revealed, studySession]);
+  }, [currentCard, showAnswer, studySession, historyStep]);
+
+  // A new or ended session invalidates any history position we were holding.
+  useEffect(() => setHistoryStep(0), [studySession?.id]);
 
   return (
     <div className="app-shell">
@@ -668,6 +711,37 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                   <span>{studySession && `${studySession.completed} of ${studySession.total} ${studySession.mode === "mastery" ? "mastered" : "reviewed"} · `}{currentCard.tags.join(" · ") || "Uncategorized"}</span>
                   <span className={`mastery-label label-${ratingLabel(currentCard.masteryRating).toLowerCase()}`}>{ratingLabel(currentCard.masteryRating)}</span>
                 </div>
+                {studySession && (studySession.results.length > 0 || viewingHistory) && (
+                  <div className="history-nav">
+                    <button
+                      type="button"
+                      className="secondary compact"
+                      disabled={historyStep >= studySession.results.length}
+                      onClick={() => setHistoryStep((step) => step + 1)}
+                    >
+                      ← Previous
+                    </button>
+                    <span className="history-position">
+                      {viewingHistory
+                        ? `Answered question ${studySession.results.length - historyStep + 1} of ${studySession.results.length}`
+                        : "Current question"}
+                    </span>
+                    <button
+                      type="button"
+                      className="secondary compact"
+                      disabled={historyStep === 0}
+                      onClick={() => setHistoryStep((step) => Math.max(0, step - 1))}
+                    >
+                      Next →
+                    </button>
+                  </div>
+                )}
+                {viewingHistory && historyResult && (
+                  <p className="history-note">
+                    Reviewing an earlier answer, rated <strong>{ratingLabel(historyResult.rating)}</strong>. Choosing a
+                    rating below replaces it.
+                  </p>
+                )}
                 <CapturedText text={reviewContent.prompt} as="h2" />
                 {reviewContent.context && <details className="case-study-reference"><summary>Case study reference</summary><CapturedText text={reviewContent.context} as="div" /></details>}
                 {currentCard.questionImages.length > 0 && <div className="question-images">{currentCard.questionImages.map((image) => <img key={image.src} src={image.dataUrl || image.src} alt={image.alt || "Question diagram"} />)}</div>}
@@ -675,11 +749,11 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                   {splitCardFront(currentCard.front).choices.map((choice) => {
                     const selected = activeChoices.has(choice);
                     const expected = correctAnswers.map(normalizeAnswerLabel).includes(normalizeAnswerLabel(choice));
-                    const feedbackClass = revealed ? expected ? "correct-choice" : selected ? "incorrect-choice" : "" : "";
-                    return <button type="button" key={choice} className={`${selected ? "selected" : ""} ${feedbackClass}`.trim()} aria-pressed={selected} disabled={revealed} onClick={() => toggleChoice(choice)}>{choice}</button>;
+                    const feedbackClass = showAnswer ? expected ? "correct-choice" : selected ? "incorrect-choice" : "" : "";
+                    return <button type="button" key={choice} className={`${selected ? "selected" : ""} ${feedbackClass}`.trim()} aria-pressed={selected} disabled={showAnswer} onClick={() => toggleChoice(choice)}>{choice}</button>;
                   })}
                 </div>
-                {!revealed ? (
+                {!showAnswer ? (
                   <button className="primary reveal" onClick={() => setRevealed(true)}>{activeChoices.size ? "Check answer" : "Reveal answer"} <span className="shortcut">Space</span></button>
                 ) : (
                   <div className="answer-panel">
