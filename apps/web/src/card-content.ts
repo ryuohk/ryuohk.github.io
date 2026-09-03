@@ -31,6 +31,22 @@ export function repairRunTogetherText(text: string): string {
     .replace(/(\s-)(?=[A-Z])/g, "$1 ");
 }
 
+/**
+ * Drops the "A." from the front of a choice, leaving the choice itself.
+ *
+ * Shuffling the rows achieves nothing while the labels are on show: the letters are in
+ * the captured order whatever the rows do, so a question answered before is still
+ * answerable from "it was C". The label is only hidden while the answer is hidden, and
+ * comes back on reveal so the stated answer, the highlighting and the discussion all
+ * refer to the same letters again.
+ *
+ * The separator has to be a stop or a bracket. A hyphen would take the "A" off choices
+ * like "A-Series virtual machines".
+ */
+export function stripChoiceLabel(choice: string): string {
+  return String(choice ?? "").replace(/^\s*[A-Za-z][.)]\s*(?=\S)/, "");
+}
+
 const CAPTURED_LIST_MARKER = /\s*[✑•]\s*/;
 const CAPTURED_LIST_TAIL = /(?:What\b|Which\b|How\b|To meet\b|You need\b|The solution\b|The monitoring solution\b|Solution:|Box \d+:|Incorrect Answers:)/;
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { signOut, type AuthState } from "./auth";
-import { repairRunTogetherText, shouldShowAnswerText, splitCapturedList, splitCardFront } from "./card-content";
+import { repairRunTogetherText, shouldShowAnswerText, splitCapturedList, splitCardFront, stripChoiceLabel } from "./card-content";
 import { DiscussionPanel } from "./DiscussionPanel";
 import { ALL_EXAMS, filterCardsByExam, listExamCodes } from "./exam-filter";
 import { EXAM_FILTER_KEY, SESSION_KEY, SETTINGS_KEY } from "./study-state";
@@ -393,6 +393,21 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   // History is always shown answered; there is nothing to reveal about it.
   const showAnswer = revealed || viewingHistory;
   const answerWasCorrect = showAnswer ? evaluateAnswer([...activeChoices], correctAnswers) : null;
+  /**
+   * Shuffled rows still give the game away while their letters are on show, because the
+   * letters keep the captured order whatever the rows do. Hidden only while the answer
+   * is, so on reveal the stated answer, the highlighting and the discussion all line up
+   * with visible letters again.
+   */
+  const hideChoiceLabels = studySettings.shuffleChoices && !showAnswer;
+  /**
+   * Exactly what the rows say, so what is read matches what is on screen. Memoized
+   * because mapping would otherwise hand the speech memo a new array every render.
+   */
+  const spokenChoices = useMemo(
+    () => (hideChoiceLabels ? displayChoices.map(stripChoiceLabel) : displayChoices),
+    [displayChoices, hideChoiceLabels],
+  );
   const sessionFinished = Boolean(studySession && studySession.queue.length === 0 && !viewingHistory);
   const sessionSummary = studySession ? summarizeStudySession(studySession) : null;
 
@@ -739,9 +754,9 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
 
   const currentSpeechText = useMemo(
     () => currentCard && reviewContent
-      ? buildQuestionSpeech(reviewContent.prompt, displayChoices, currentCard.questionImages.length)
+      ? buildQuestionSpeech(reviewContent.prompt, spokenChoices, currentCard.questionImages.length)
       : "",
-    [currentCard, reviewContent, displayChoices],
+    [currentCard, reviewContent, spokenChoices],
   );
 
   /**
@@ -825,7 +840,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     speakText(
       // Read in the order shown. Not a dependency: reshuffling mid-question should not
       // interrupt the reading, and the choices are read from the current value anyway.
-      buildQuestionSpeech(reviewContent.prompt, displayChoices, currentCard.questionImages.length),
+      buildQuestionSpeech(reviewContent.prompt, spokenChoices, currentCard.questionImages.length),
       () => speechOptionsRef.current,
     );
     // Leaving the question, the view, or the app stops it mid-sentence rather than
@@ -1098,7 +1113,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                     const selected = activeChoices.has(choice);
                     const expected = correctAnswers.map(normalizeAnswerLabel).includes(normalizeAnswerLabel(choice));
                     const feedbackClass = showAnswer ? expected ? "correct-choice" : selected ? "incorrect-choice" : "" : "";
-                    return <button type="button" key={choice} className={`${selected ? "selected" : ""} ${feedbackClass}`.trim()} aria-pressed={selected} disabled={showAnswer} onClick={() => toggleChoice(choice)}>{choice}</button>;
+                    return <button type="button" key={choice} className={`${selected ? "selected" : ""} ${feedbackClass}`.trim()} aria-pressed={selected} disabled={showAnswer} onClick={() => toggleChoice(choice)}>{hideChoiceLabels ? stripChoiceLabel(choice) : choice}</button>;
                   })}
                 </div>
                 {!showAnswer ? (

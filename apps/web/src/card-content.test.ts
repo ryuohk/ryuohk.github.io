@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { repairRunTogetherText, shouldShowAnswerText, splitCapturedList, splitCardFront } from "./card-content";
+import { repairRunTogetherText, shouldShowAnswerText, splitCapturedList, splitCardFront, stripChoiceLabel } from "./card-content";
 
 describe("flashcard content shaping", () => {
   it("puts a final case-study question before collapsible reference text", () => {
@@ -146,5 +146,42 @@ describe("splitCardFront applies the repair", () => {
 
     expect(content.context).not.toBe("");
     expect(content.prompt.startsWith("To meet the technical requirements")).toBe(true);
+  });
+});
+
+/**
+ * Hiding the choice letter while the answer is hidden.
+ *
+ * Shuffling the rows achieves nothing on its own: the letters stay in the captured
+ * order whatever the rows do, so "it was C" still answers a question you have seen
+ * before. The letter comes back on reveal, so the stated answer, the highlighting and
+ * the discussion all refer to visible letters again.
+ */
+describe("stripChoiceLabel", () => {
+  it("removes the label and leaves the choice", () => {
+    expect(stripChoiceLabel("A. Gateway Load Balancer")).toBe("Gateway Load Balancer");
+    expect(stripChoiceLabel("D. Azure Traffic Manager")).toBe("Azure Traffic Manager");
+  });
+
+  it("handles a bracket separator and a missing space", () => {
+    expect(stripChoiceLabel("B) Azure Front Door")).toBe("Azure Front Door");
+    expect(stripChoiceLabel("C.Azure Application Gateway")).toBe("Azure Application Gateway");
+  });
+
+  it("keeps a hyphen, which belongs to the choice rather than to a label", () => {
+    // "A-Series" would otherwise be read as label A followed by "Series".
+    expect(stripChoiceLabel("A-Series virtual machines")).toBe("A-Series virtual machines");
+    expect(stripChoiceLabel("B. A-Series virtual machines")).toBe("A-Series virtual machines");
+  });
+
+  it("leaves a choice that carries no label", () => {
+    expect(stripChoiceLabel("Azure Front Door")).toBe("Azure Front Door");
+    expect(stripChoiceLabel("Use a load balancer.")).toBe("Use a load balancer.");
+  });
+
+  it("survives empty and malformed input", () => {
+    expect(stripChoiceLabel("")).toBe("");
+    expect(stripChoiceLabel("A.")).toBe("A.");
+    expect(stripChoiceLabel(undefined as unknown as string)).toBe("");
   });
 });
