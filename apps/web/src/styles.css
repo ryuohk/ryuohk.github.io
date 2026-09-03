@@ -115,6 +115,20 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .answer-label { margin: 0 0 5px; color: #07845d; font-size: 10px; font-weight: 800; letter-spacing: .12em; }
 .answer-panel h3 { margin: 0 0 8px; white-space: pre-wrap; }
 .answer-panel p { color: #526679; white-space: pre-wrap; overflow-wrap: anywhere; }
+.speech-settings { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px solid #eef1f6; color: #4e6079; font-size: 13px; }
+.speech-toggle { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; cursor: pointer; }
+.speech-toggle input { width: 18px; height: 18px; accent-color: #2563eb; }
+.speech-rate, .speech-voice { display: inline-flex; align-items: center; gap: 8px; }
+.speech-rate input[type="range"] { width: 120px; accent-color: #2563eb; }
+.speech-rate-value { min-width: 34px; font-variant-numeric: tabular-nums; font-weight: 700; }
+.speech-voice select { max-width: 210px; }
+@media (max-width: 780px) {
+  .speech-settings { gap: 12px; }
+  .speech-rate input[type="range"] { width: 100%; min-width: 140px; }
+  .speech-voice { width: 100%; }
+  .speech-voice select { flex: 1; max-width: none; }
+}
+
 .history-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 18px; }
 .history-nav button { min-height: 40px; white-space: nowrap; }
 .history-position { color: #6b7a90; font-size: 12px; font-weight: 700; text-align: center; }

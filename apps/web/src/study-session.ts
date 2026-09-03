@@ -8,6 +8,10 @@ export interface StudySettings {
   masteryPool: MasteryPool;
   easyReviewSize: number;
   masteryCardIds: string[];
+  /** Read each question aloud as it appears. Syncs, so it follows you between devices. */
+  speakQuestions: boolean;
+  /** Speaking rate, roughly 0.5 to 2. Voice choice stays per-device, see speech.ts. */
+  speechRate: number;
 }
 
 export interface StudyResult {

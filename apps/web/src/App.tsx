@@ -5,6 +5,17 @@ import { DiscussionPanel } from "./DiscussionPanel";
 import { ALL_EXAMS, filterCardsByExam, listExamCodes } from "./exam-filter";
 import { EXAM_FILTER_KEY, SESSION_KEY, SETTINGS_KEY } from "./study-state";
 import type { SyncResult } from "./sync";
+import {
+  DEFAULT_SPEECH_RATE,
+  SPEECH_RATE_MAX,
+  SPEECH_RATE_MIN,
+  buildQuestionSpeech,
+  cancelSpeech,
+  isSpeechSupported,
+  listSpeechVoices,
+  onVoicesReady,
+  speakText,
+} from "./speech";
 import { useCloudSync, type CloudSync } from "./useCloudSync";
 import {
   ensureMasteryProgress,
@@ -48,7 +59,12 @@ const DEFAULT_STUDY_SETTINGS: StudySettings = {
   masteryPool: "all-not-easy",
   easyReviewSize: 20,
   masteryCardIds: [],
+  speakQuestions: false,
+  speechRate: DEFAULT_SPEECH_RATE,
 };
+/** Per-device: the voice list comes from the OS and differs between machines. */
+const VOICE_KEY = "crambot-speech-voice";
+
 const RATING_OPTIONS = [
   { value: MasteryRating.Again, label: "Again", tone: "again" },
   { value: MasteryRating.Hard, label: "Hard", tone: "hard" },
@@ -77,6 +93,8 @@ function readStudySettings(session: StudySession | null = null): StudySettings {
       masteryPool: stored.masteryPool === "again-hard" ? "again-hard" : "all-not-easy",
       easyReviewSize: normalizeQuestionCount(stored.easyReviewSize, migratedCount),
       masteryCardIds: [...new Set([...masteryCardIds, ...legacySessionIds])],
+      speakQuestions: stored.speakQuestions === true,
+      speechRate: normalizeSpeechRate(stored.speechRate),
     };
   } catch {
     return {
@@ -84,6 +102,12 @@ function readStudySettings(session: StudySession | null = null): StudySettings {
       masteryCardIds: session?.mode === "mastery" ? normalizeCardIds(session.queue) : [],
     };
   }
+}
+
+function normalizeSpeechRate(value: unknown): number {
+  const rate = typeof value === "number" ? value : Number.NaN;
+  if (!Number.isFinite(rate)) return DEFAULT_SPEECH_RATE;
+  return Math.min(SPEECH_RATE_MAX, Math.max(SPEECH_RATE_MIN, rate));
 }
 
 function readExamFilter(): string {
@@ -616,6 +640,45 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   // A new or ended session invalidates any history position we were holding.
   useEffect(() => setHistoryStep(0), [studySession?.id]);
 
+  /**
+   * Voice choice stays on the device rather than syncing. The available voices come
+   * from the operating system, so a name picked on a laptop simply does not exist on
+   * a phone, and syncing it would leave one device silently falling back.
+   */
+  const [voiceURI, setVoiceURI] = useState<string>(() => {
+    try {
+      return localStorage.getItem(VOICE_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  useEffect(() => {
+    const refresh = () => setVoices(listSpeechVoices());
+    refresh();
+    return onVoicesReady(refresh);
+  }, []);
+
+  /**
+   * Speaks whenever the question changes, and only then. Reveals and re-renders must
+   * not restart it, or the reading would loop over itself while you think.
+   */
+  useEffect(() => {
+    if (!studySettings.speakQuestions || !currentCard || !reviewContent || view !== "study") {
+      cancelSpeech();
+      return;
+    }
+    speakText(
+      buildQuestionSpeech(reviewContent.prompt, splitCardFront(currentCard.front).choices, currentCard.questionImages.length),
+      { rate: studySettings.speechRate, voiceURI: voiceURI || null },
+    );
+    // Leaving the question, the view, or the app stops it mid-sentence rather than
+    // talking over whatever comes next.
+    return () => cancelSpeech();
+  }, [currentCard?.id, studySettings.speakQuestions, studySettings.speechRate, voiceURI, view]);
+
+  useEffect(() => () => cancelSpeech(), []);
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -698,6 +761,63 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 </> : <button className="primary compact" disabled={easyPool.length === 0} onClick={() => startStudySession("easy-review")}>{studySession ? "Restart review" : "Start Easy review"}</button>}
                 {studySession && <button className="secondary compact" onClick={() => setStudySession(null)}>End session</button>}
               </div>
+              {isSpeechSupported() && (
+                <div className="speech-settings">
+                  <label className="speech-toggle">
+                    <input
+                      type="checkbox"
+                      checked={studySettings.speakQuestions}
+                      onChange={(event) => setStudySettings((existing) => ({ ...existing, speakQuestions: event.target.checked }))}
+                    />
+                    Read questions aloud
+                  </label>
+                  {studySettings.speakQuestions && (
+                    <>
+                      <label className="speech-rate">
+                        Speed
+                        <input
+                          type="range"
+                          min={SPEECH_RATE_MIN}
+                          max={SPEECH_RATE_MAX}
+                          step={0.1}
+                          value={studySettings.speechRate}
+                          onChange={(event) => setStudySettings((existing) => ({ ...existing, speechRate: Number(event.target.value) }))}
+                        />
+                        <span className="speech-rate-value">{studySettings.speechRate.toFixed(1)}×</span>
+                      </label>
+                      {voices.length > 0 && (
+                        <label className="speech-voice">
+                          Voice
+                          <select
+                            value={voiceURI}
+                            onChange={(event) => {
+                              setVoiceURI(event.target.value);
+                              try {
+                                if (event.target.value) localStorage.setItem(VOICE_KEY, event.target.value);
+                                else localStorage.removeItem(VOICE_KEY);
+                              } catch {
+                                // The choice simply will not persist; speech still works.
+                              }
+                            }}
+                          >
+                            <option value="">System default</option>
+                            {voices.map((voice) => (
+                              <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name} ({voice.lang})</option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      <button
+                        type="button"
+                        className="secondary compact"
+                        onClick={() => speakText("Speech is on. This is how questions will sound.", { rate: studySettings.speechRate, voiceURI: voiceURI || null })}
+                      >
+                        Test voice
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="progress-card">
