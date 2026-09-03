@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildQuestionSpeech, chunkForSpeech, clampRate, clampVolume } from "./speech";
+import { buildQuestionSpeech, chunkForSpeech, clampRate, clampVolume, resolveSpeechOptions } from "./speech";
 
 // Chrome truncates a single utterance at roughly 200 characters with no error, so
 // every chunk staying under the limit is the whole point of this module.
@@ -85,6 +85,29 @@ describe("buildQuestionSpeech", () => {
   it("survives empty and malformed input", () => {
     expect(buildQuestionSpeech("", [])).toBe("");
     expect(buildQuestionSpeech("Prompt.", ["", "   "])).not.toContain("Choices.");
+  });
+});
+
+describe("live settings", () => {
+  // Each chunk reads the settings again, so moving a slider applies to the next
+  // sentence instead of cancelling and restarting the question.
+  it("reads a getter every time rather than capturing once", () => {
+    let rate = 1;
+    const source = () => ({ rate });
+    expect(resolveSpeechOptions(source).rate).toBe(1);
+    rate = 1.8;
+    expect(resolveSpeechOptions(source).rate).toBe(1.8);
+  });
+
+  it("still accepts a plain options object", () => {
+    expect(resolveSpeechOptions({ rate: 1.4, volume: 0.5 })).toEqual({ rate: 1.4, volume: 0.5 });
+  });
+
+  it("falls back to defaults rather than going silent if the getter throws", () => {
+    expect(resolveSpeechOptions(() => {
+      throw new Error("state read failed");
+    })).toEqual({});
+    expect(resolveSpeechOptions(undefined)).toEqual({});
   });
 });
 

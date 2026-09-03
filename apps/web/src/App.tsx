@@ -675,8 +675,18 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   }, []);
 
   /**
-   * Speaks whenever the question changes, and only then. Reveals and re-renders must
-   * not restart it, or the reading would loop over itself while you think.
+   * Live speech settings, read fresh as each chunk starts.
+   *
+   * Kept in a ref rather than the effect's dependencies so that dragging the speed or
+   * volume slider does not cancel and restart the question. The utterance already
+   * speaking cannot change, so an adjustment lands on the next sentence.
+   */
+  const speechOptionsRef = useRef({ rate: studySettings.speechRate, volume: studySettings.speechVolume, voiceURI: voiceURI || null });
+  speechOptionsRef.current = { rate: studySettings.speechRate, volume: studySettings.speechVolume, voiceURI: voiceURI || null };
+
+  /**
+   * Speaks whenever the question changes, and only then. Reveals, re-renders and
+   * slider adjustments must not restart it.
    */
   useEffect(() => {
     if (!studySettings.speakQuestions || !currentCard || !reviewContent || view !== "study") {
@@ -685,12 +695,13 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     }
     speakText(
       buildQuestionSpeech(reviewContent.prompt, splitCardFront(currentCard.front).choices, currentCard.questionImages.length),
-      { rate: studySettings.speechRate, volume: studySettings.speechVolume, voiceURI: voiceURI || null },
+      () => speechOptionsRef.current,
     );
     // Leaving the question, the view, or the app stops it mid-sentence rather than
     // talking over whatever comes next.
     return () => cancelSpeech();
-  }, [currentCard?.id, studySettings.speakQuestions, studySettings.speechRate, studySettings.speechVolume, voiceURI, view]);
+    // Rate and volume are deliberately absent: they are read live from the ref.
+  }, [currentCard?.id, studySettings.speakQuestions, voiceURI, view]);
 
   useEffect(() => () => cancelSpeech(), []);
 
@@ -837,7 +848,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                       <button
                         type="button"
                         className="secondary compact"
-                        onClick={() => speakText("Speech is on. This is how questions will sound.", { rate: studySettings.speechRate, volume: studySettings.speechVolume, voiceURI: voiceURI || null })}
+                        onClick={() => speakText("Speech is on. This is how questions will sound.", () => speechOptionsRef.current)}
                       >
                         Test voice
                       </button>

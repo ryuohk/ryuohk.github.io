@@ -31,6 +31,26 @@ export interface SpeechOptions {
   voiceURI?: string | null;
 }
 
+/**
+ * Either fixed options, or a getter read once per chunk.
+ *
+ * A speaking utterance cannot be changed once started, so live adjustment works by
+ * applying the newest settings to the next chunk. Passing a getter lets a speed or
+ * volume change take effect within a sentence or two instead of forcing a restart.
+ */
+export type SpeechOptionsSource = SpeechOptions | (() => SpeechOptions);
+
+export function resolveSpeechOptions(source: SpeechOptionsSource | undefined): SpeechOptions {
+  if (typeof source === "function") {
+    try {
+      return source() ?? {};
+    } catch {
+      return {};
+    }
+  }
+  return source ?? {};
+}
+
 export function isSpeechSupported(): boolean {
   return typeof window !== "undefined" && typeof window.speechSynthesis !== "undefined";
 }
@@ -175,7 +195,7 @@ export function cancelSpeech(): void {
   }
 }
 
-export function speakText(text: string, options: SpeechOptions = {}): void {
+export function speakText(text: string, options: SpeechOptionsSource = {}): void {
   if (!isSpeechSupported()) return;
   cancelSpeech();
 
@@ -184,17 +204,21 @@ export function speakText(text: string, options: SpeechOptions = {}): void {
 
   const token = speechToken;
   const synthesis = window.speechSynthesis;
-  const voice = options.voiceURI ? listSpeechVoices().find((candidate) => candidate.voiceURI === options.voiceURI) : undefined;
 
   let index = 0;
   const speakNext = () => {
     // A newer question, or a cancel, invalidates everything still queued here.
     if (token !== speechToken || index >= chunks.length) return;
+    // Read per chunk, so speed and volume changes apply without a restart.
+    const current = resolveSpeechOptions(options);
+    const voice = current.voiceURI
+      ? listSpeechVoices().find((candidate) => candidate.voiceURI === current.voiceURI)
+      : undefined;
     const utterance = new SpeechSynthesisUtterance(chunks[index]);
     index += 1;
-    utterance.rate = clampRate(options.rate);
-    utterance.pitch = options.pitch ?? 1;
-    utterance.volume = clampVolume(options.volume);
+    utterance.rate = clampRate(current.rate);
+    utterance.pitch = current.pitch ?? 1;
+    utterance.volume = clampVolume(current.volume);
     if (voice) {
       utterance.voice = voice;
       utterance.lang = voice.lang;
