@@ -137,7 +137,7 @@ export function advanceStudySession(
     completed: session.completed + (completed ? 1 : 0),
     attempts: session.attempts + 1,
     results: [...session.results, result],
-    answers: { ...session.answers, [cardId]: [...selectedAnswers] },
+    answers: { ...session.answers, [cardId]: [] },
   };
 }
 

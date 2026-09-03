@@ -106,7 +106,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .choices { display: grid; gap: 10px; }
 .choices button { border: 1px solid #e1e6ef; border-radius: 10px; padding: 14px 16px; color: #35445c; background: #fafbfd; text-align: left; white-space: pre-wrap; transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
 .choices button:hover:not(:disabled) { border-color: #97b6e8; background: #f5f9ff; }
-.choices button.selected { border-color: #2563eb; background: #edf4ff; box-shadow: 0 0 0 2px #2563eb18; }
+.choices button.selected { border-color: #1d4ed8; color: #153e8a; background: #cfe0ff; box-shadow: 0 0 0 2px #1d4ed840; font-weight: 700; }
 .choices button:disabled { opacity: 1; }
 .choices button.correct-choice { border-color: #18a173; background: #e4f9f1; box-shadow: 0 0 0 2px #18a17324; }
 .choices button.incorrect-choice { border-color: #d45b51; background: #fff0ee; box-shadow: 0 0 0 2px #d45b5124; }

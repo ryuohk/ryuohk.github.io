@@ -58,11 +58,13 @@ describe("mastery study sessions", () => {
 
   it("keeps a Mastery question in rotation until it is rated Easy", () => {
     const session = createStudySession([card("one"), card("two")], settings, "mastery", () => 0.99);
-    const repeated = advanceStudySession(session, "one", MasteryRating.Good);
+    const repeated = advanceStudySession(session, "one", MasteryRating.Good, ["A. One"], ["A"]);
     const mastered = advanceStudySession(repeated, "two", MasteryRating.Easy);
 
     expect(repeated.queue).toEqual(["two", "one"]);
     expect(repeated.completed).toBe(0);
+    expect(repeated.results[0]).toMatchObject({ cardId: "one", selectedAnswers: ["A"], correct: true });
+    expect(repeated.answers.one).toEqual([]);
     expect(mastered.queue).toEqual(["one"]);
     expect(mastered.completed).toBe(1);
     expect(mastered.attempts).toBe(2);
