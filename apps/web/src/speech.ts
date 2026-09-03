@@ -185,8 +185,19 @@ export function clampVolume(volume: number | undefined): number {
  */
 let speechToken = 0;
 
+interface ActiveRun {
+  chunks: string[];
+  /** The chunk currently being spoken, which is what a settings change restarts. */
+  speakingIndex: number;
+  nextIndex: number;
+  options: SpeechOptionsSource;
+}
+
+let activeRun: ActiveRun | null = null;
+
 export function cancelSpeech(): void {
   speechToken += 1;
+  activeRun = null;
   if (!isSpeechSupported()) return;
   try {
     window.speechSynthesis.cancel();
@@ -195,27 +206,31 @@ export function cancelSpeech(): void {
   }
 }
 
-export function speakText(text: string, options: SpeechOptionsSource = {}): void {
-  if (!isSpeechSupported()) return;
+function startSpeaking(chunks: string[], startIndex: number, options: SpeechOptionsSource): void {
   cancelSpeech();
-
-  const chunks = chunkForSpeech(text);
-  if (chunks.length === 0) return;
+  if (!isSpeechSupported() || startIndex >= chunks.length) return;
 
   const token = speechToken;
   const synthesis = window.speechSynthesis;
+  const run: ActiveRun = { chunks, speakingIndex: startIndex, nextIndex: startIndex, options };
+  activeRun = run;
 
-  let index = 0;
   const speakNext = () => {
     // A newer question, or a cancel, invalidates everything still queued here.
-    if (token !== speechToken || index >= chunks.length) return;
+    if (token !== speechToken) return;
+    if (run.nextIndex >= chunks.length) {
+      activeRun = null;
+      return;
+    }
+    run.speakingIndex = run.nextIndex;
+    run.nextIndex += 1;
+
     // Read per chunk, so speed and volume changes apply without a restart.
     const current = resolveSpeechOptions(options);
     const voice = current.voiceURI
       ? listSpeechVoices().find((candidate) => candidate.voiceURI === current.voiceURI)
       : undefined;
-    const utterance = new SpeechSynthesisUtterance(chunks[index]);
-    index += 1;
+    const utterance = new SpeechSynthesisUtterance(chunks[run.speakingIndex]);
     utterance.rate = clampRate(current.rate);
     utterance.pitch = current.pitch ?? 1;
     utterance.volume = clampVolume(current.volume);
@@ -235,4 +250,30 @@ export function speakText(text: string, options: SpeechOptionsSource = {}): void
     }
   };
   speakNext();
+}
+
+export function speakText(text: string, options: SpeechOptionsSource = {}): void {
+  if (!isSpeechSupported()) return;
+  startSpeaking(chunkForSpeech(text), 0, options);
+}
+
+/**
+ * Re-speaks the sentence in flight so a new rate or volume is audible at once.
+ *
+ * A speaking utterance cannot be altered, so the only way to make an adjustment
+ * immediate is to say that sentence again with the new settings. Restarting just the
+ * current chunk keeps your place in the question, unlike starting over. Intended for
+ * a slider's release rather than every movement, which would stutter.
+ */
+export function applySpeechSettings(): void {
+  const run = activeRun;
+  if (!run || !isSpeechSupported()) return;
+  // Captured before cancelSpeech clears activeRun.
+  const { chunks, speakingIndex, options } = run;
+  startSpeaking(chunks, speakingIndex, options);
+}
+
+/** True while a question is mid-reading, so callers can skip pointless restarts. */
+export function isSpeaking(): boolean {
+  return activeRun !== null;
 }

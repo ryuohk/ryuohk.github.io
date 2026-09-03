@@ -12,6 +12,7 @@ import {
   SPEECH_RATE_MIN,
   SPEECH_VOLUME_MAX,
   SPEECH_VOLUME_MIN,
+  applySpeechSettings,
   buildQuestionSpeech,
   cancelSpeech,
   isSpeechSupported,
@@ -808,6 +809,8 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                           step={0.1}
                           value={studySettings.speechRate}
                           onChange={(event) => setStudySettings((existing) => ({ ...existing, speechRate: Number(event.target.value) }))}
+                          onPointerUp={() => applySpeechSettings()}
+                          onKeyUp={() => applySpeechSettings()}
                         />
                         <span className="speech-rate-value">{studySettings.speechRate.toFixed(1)}×</span>
                       </label>
@@ -820,6 +823,8 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                           step={0.05}
                           value={studySettings.speechVolume}
                           onChange={(event) => setStudySettings((existing) => ({ ...existing, speechVolume: Number(event.target.value) }))}
+                          onPointerUp={() => applySpeechSettings()}
+                          onKeyUp={() => applySpeechSettings()}
                         />
                         <span className="speech-rate-value">{Math.round(studySettings.speechVolume * 100)}%</span>
                       </label>
