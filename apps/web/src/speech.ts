@@ -13,8 +13,21 @@
  * matters here.
  */
 
-/** Comfortably under Chrome's truncation point, and close to a natural breath. */
+/** Hard ceiling. Past roughly this length Chrome cuts the utterance off silently. */
 const MAX_CHUNK_CHARS = 180;
+
+/**
+ * Preferred length, well under the ceiling.
+ *
+ * Restarting the utterance in flight is the only way to apply a new speed or to resume
+ * after a pause, so the piece being spoken is how far playback rewinds. At a normal
+ * pace 90 characters is about five seconds, half of what the ceiling would cost. The
+ * price of going lower is not processing: chunking is one pass over the string. It is
+ * the seam between utterances, a short gap the engine inserts and a handoff that
+ * depends on an `end` event firing, so more pieces means choppier speech and more
+ * chances for a question to stop early.
+ */
+const TARGET_CHUNK_CHARS = 90;
 
 export const SPEECH_RATE_MIN = 0.5;
 export const SPEECH_RATE_MAX = 2;
@@ -55,9 +68,18 @@ export function isSpeechSupported(): boolean {
   return typeof window !== "undefined" && typeof window.speechSynthesis !== "undefined";
 }
 
+/**
+ * Sentence boundaries, ignoring the period after a choice label.
+ *
+ * "A." is not the end of a sentence, and treating it as one strands the letter on the
+ * end of the previous piece: you hear "Choices. A." and then, after the seam, the text
+ * of choice A with "B." tacked on. The negative lookbehind skips a full stop or colon
+ * that follows a lone letter, which is what a label is and what an ordinary word
+ * ending a sentence is not.
+ */
 function splitSentences(text: string): string[] {
   return text
-    .split(/(?<=[.!?:])\s+|\n+/)
+    .split(/(?<=[.!?:])(?<!(?:^|\s)[A-Za-z][.:])\s+|\n+/)
     .map((part) => part.trim())
     .filter(Boolean);
 }
@@ -95,17 +117,23 @@ function splitLongRun(sentence: string, maxChars: number): string[] {
 /**
  * Splits text into utterance-sized pieces, preferring sentence boundaries, then
  * clause punctuation, and only breaking mid-clause when a run has neither.
+ *
+ * Two limits, doing different jobs. Pieces are packed up to `targetChars`, which keeps
+ * the usual piece short so a pause or a speed change rewinds only a few seconds. A
+ * single sentence or clause longer than that is still kept whole up to `maxChars`,
+ * because a break at punctuation sounds deliberate and one mid-clause does not.
  */
-export function chunkForSpeech(text: string, maxChars = MAX_CHUNK_CHARS): string[] {
+export function chunkForSpeech(text: string, maxChars = MAX_CHUNK_CHARS, targetChars = TARGET_CHUNK_CHARS): string[] {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) return [];
+  const target = Math.max(1, Math.min(targetChars, maxChars));
 
   const chunks: string[] = [];
   let current = "";
 
   const push = (piece: string) => {
     if (!piece) return;
-    if (current && `${current} ${piece}`.length > maxChars) {
+    if (current && `${current} ${piece}`.length > target) {
       chunks.push(current);
       current = piece;
     } else {
@@ -114,15 +142,15 @@ export function chunkForSpeech(text: string, maxChars = MAX_CHUNK_CHARS): string
   };
 
   for (const sentence of splitSentences(trimmed)) {
-    if (sentence.length <= maxChars) {
+    if (sentence.length <= target) {
       push(sentence);
       continue;
     }
-    // Too long on its own: try clause punctuation before breaking on words.
+    // Longer than we would like: look for clause punctuation to break on instead.
     const clauses = sentence.split(/(?<=[,;])\s+/).map((part) => part.trim()).filter(Boolean);
     for (const clause of clauses) {
       if (clause.length <= maxChars) push(clause);
-      else for (const run of splitLongRun(clause, maxChars)) push(run);
+      else for (const run of splitLongRun(clause, target)) push(run);
     }
   }
   if (current) chunks.push(current);
@@ -191,6 +219,40 @@ interface ActiveRun {
   speakingIndex: number;
   nextIndex: number;
   options: SpeechOptionsSource;
+  /**
+   * How far into the speaking chunk the engine has reached, from its `boundary`
+   * events. Stays at zero on engines that do not fire them, some Android voices
+   * among them, and the chunk then simply restarts from its beginning.
+   */
+  spokenChars: number;
+}
+
+/** Snaps back to the start of the word at `index`, so nothing resumes mid-word. */
+function wordStartBefore(text: string, index: number): number {
+  if (!Number.isFinite(index) || index <= 0 || index >= text.length) return 0;
+  let start = Math.floor(index);
+  while (start > 0 && !/\s/.test(text[start - 1])) start -= 1;
+  return start;
+}
+
+/**
+ * The run's chunks with the sentence in flight trimmed to the word being spoken.
+ *
+ * An utterance cannot be altered once started, so resuming and changing the speed both
+ * mean speaking that sentence again. Boundary events let it start again at the word you
+ * were on rather than the top of the sentence, which is the difference between losing a
+ * word and losing five seconds. Where the engine reports nothing, this returns the
+ * chunks untouched and the sentence repeats, as before.
+ */
+function chunksFromSpokenPoint(run: ActiveRun): string[] {
+  const chunk = run.chunks[run.speakingIndex] ?? "";
+  const offset = wordStartBefore(chunk, run.spokenChars);
+  if (offset <= 0) return run.chunks;
+  const remainder = chunk.slice(offset).trim();
+  if (!remainder) return run.chunks;
+  const chunks = [...run.chunks];
+  chunks[run.speakingIndex] = remainder;
+  return chunks;
 }
 
 let activeRun: ActiveRun | null = null;
@@ -215,7 +277,7 @@ function startSpeaking(chunks: string[], startIndex: number, options: SpeechOpti
 
   const token = speechToken;
   const synthesis = window.speechSynthesis;
-  const run: ActiveRun = { chunks, speakingIndex: startIndex, nextIndex: startIndex, options };
+  const run: ActiveRun = { chunks, speakingIndex: startIndex, nextIndex: startIndex, options, spokenChars: 0 };
   activeRun = run;
 
   const speakNext = () => {
@@ -227,6 +289,7 @@ function startSpeaking(chunks: string[], startIndex: number, options: SpeechOpti
     }
     run.speakingIndex = run.nextIndex;
     run.nextIndex += 1;
+    run.spokenChars = 0;
 
     // Read per chunk, so speed and volume changes apply without a restart.
     const current = resolveSpeechOptions(options);
@@ -242,6 +305,13 @@ function startSpeaking(chunks: string[], startIndex: number, options: SpeechOpti
       utterance.lang = voice.lang;
     }
     utterance.onend = speakNext;
+    // Progress within the sentence, so a pause or a speed change can pick up near
+    // where it stopped. Guarded because a stale event must not move a newer run.
+    utterance.onboundary = (event) => {
+      if (token !== speechToken) return;
+      const index = event.charIndex;
+      if (typeof index === "number" && index > run.spokenChars) run.spokenChars = index;
+    };
     // Abandon the rest rather than stuttering through a broken engine.
     utterance.onerror = () => undefined;
     try {
@@ -272,8 +342,8 @@ export function applySpeechSettings(): void {
   const run = activeRun;
   if (!run || !isSpeechSupported()) return;
   // Captured before cancelSpeech clears activeRun.
-  const { chunks, speakingIndex, options } = run;
-  startSpeaking(chunks, speakingIndex, options);
+  const chunks = chunksFromSpokenPoint(run);
+  startSpeaking(chunks, run.speakingIndex, run.options);
 }
 
 /** True while a question is mid-reading, so callers can skip pointless restarts. */
@@ -292,7 +362,7 @@ export function isSpeaking(): boolean {
 export function pauseSpeech(): boolean {
   const run = activeRun;
   if (!run) return false;
-  const snapshot: ActiveRun = { ...run };
+  const snapshot: ActiveRun = { ...run, chunks: chunksFromSpokenPoint(run), spokenChars: 0 };
   cancelSpeech();
   pausedRun = snapshot;
   return true;
