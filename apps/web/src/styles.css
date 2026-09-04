@@ -90,6 +90,12 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .running-session { gap: 9px; }
 /* Destructive actions stack in their own panel rather than sitting in the toolbar. */
 .danger-menu > summary { color: #8a94a6; font-weight: 800; letter-spacing: .08em; }
+/* Named after the group or topic it acts on, so the button says what it will touch. */
+.scope-menu > summary { max-width: 190px; color: #35445c; }
+.scope-menu > summary > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scope-menu .more-panel { min-width: 240px; gap: 9px; }
+.scope-menu .more-panel button { width: 100%; align-self: stretch; }
+.menu-hint { margin: 0; color: #778499; font-size: 11px; line-height: 1.5; }
 .danger-menu .more-panel { min-width: 220px; gap: 9px; }
 .danger-menu .more-panel button { width: 100%; }
 .progress-card { grid-column: 2; grid-row: 3; border: 1px solid #e0e5ee; border-radius: 16px; padding: 8px 18px; background: #fff; box-shadow: 0 8px 24px #1621390a; }

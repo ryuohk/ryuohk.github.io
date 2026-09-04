@@ -4,6 +4,17 @@ import { repairRunTogetherText, shouldShowAnswerText, splitCapturedList, splitCa
 import { DiscussionPanel } from "./DiscussionPanel";
 import { ALL_EXAMS, filterCardsByExam, listExamCodes } from "./exam-filter";
 import { EXAM_FILTER_KEY, SESSION_KEY, SETTINGS_KEY } from "./study-state";
+import {
+  ALL_TOPICS,
+  TOPIC_PREFIX,
+  UNTOPICED,
+  filterCardsByTopic,
+  filterUntopicedCards,
+  findTopicName,
+  listTopicNames,
+  normalizeTopicName,
+  selectedTopicName,
+} from "./topics";
 import type { SyncResult } from "./sync";
 import {
   DEFAULT_SPEECH_RATE,
@@ -32,6 +43,7 @@ import {
   removeCards,
   resetMasteryRatings,
   restoreLibrary,
+  retopicQuestions,
   saveImport,
   saveReview,
 } from "./db";
@@ -463,6 +475,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   // Prefixed rather than a bare name, so a group called "all" or "ungrouped" cannot
   // be mistaken for the two options that are not groups.
   const [groupFilter, setGroupFilter] = useState<string>(ALL_GROUPS);
+  const [topicFilter, setTopicFilter] = useState<string>(ALL_TOPICS);
   const [examFilter, setExamFilter] = useState(readExamFilter);
   const [extensionInfo, setExtensionInfo] = useState<{ version: string; bytes: number } | null>(null);
   const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(() => new Set());
@@ -671,25 +684,49 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   }, [cardGroups, groupNames]);
   const activeGroup = selectedGroupName(groupFilter);
 
-  // A group that empties out, or an exam that has none of its questions, would leave
-  // the library looking empty for a reason nothing on screen explains.
+  // Topics come off the capture rather than being chosen, so they are read from the
+  // questions rather than from settings, and scoped to the exam like the groups above.
+  const examQuestions = useMemo(
+    () => [...new Set(examCards.map((card) => card.questionId))].map((id) => questionById.get(id)).filter((question): question is CapturedQuestion => Boolean(question)),
+    [examCards, questionById],
+  );
+  const topicNames = useMemo(() => listTopicNames(examQuestions), [examQuestions]);
+  const topicCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const name of topicNames) counts.set(name, filterCardsByTopic(examCards, questionById, name).length);
+    return counts;
+  }, [examCards, questionById, topicNames]);
+  const untopicedCount = useMemo(() => filterUntopicedCards(examCards, questionById).length, [examCards, questionById]);
+  const activeTopic = selectedTopicName(topicFilter);
+
+  // A group or topic that empties out, or an exam that has none of its questions, would
+  // leave the library looking empty for a reason nothing on screen explains.
   useEffect(() => {
     if (activeGroup && !findGroupName(cardGroups, activeGroup)) setGroupFilter(ALL_GROUPS);
   }, [activeGroup, cardGroups]);
 
+  useEffect(() => {
+    if (activeTopic && !findTopicName(examQuestions, activeTopic)) setTopicFilter(ALL_TOPICS);
+  }, [activeTopic, examQuestions]);
+
   const filteredCards = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const scoped = activeGroup
+    const grouped = activeGroup
       ? filterCardsByGroup(examCards, cardGroups, activeGroup)
       : groupFilter === UNGROUPED
         ? filterUngroupedCards(examCards, cardGroups)
         : examCards;
+    const scoped = activeTopic
+      ? filterCardsByTopic(grouped, questionById, activeTopic)
+      : topicFilter === UNTOPICED
+        ? filterUntopicedCards(grouped, questionById)
+        : grouped;
     return filterCardsByLabel(scoped, labelFilter)
       // Group names join the haystack, so searching "networking" finds the questions
       // you filed under it even when the word appears nowhere in the question itself.
       .filter((card) => !needle || `${card.front} ${card.back} ${card.notes ?? ""} ${card.tags.join(" ")} ${(groupsByCardId.get(card.id) ?? []).join(" ")}`.toLowerCase().includes(needle))
       .sort((left, right) => left.front.localeCompare(right.front));
-  }, [activeGroup, cardGroups, examCards, groupFilter, groupsByCardId, labelFilter, query]);
+  }, [activeGroup, activeTopic, cardGroups, examCards, groupFilter, groupsByCardId, labelFilter, query, questionById, topicFilter]);
   const selectedCards = useMemo(() => examCards.filter((card) => selectedCardIds.has(card.id)), [examCards, selectedCardIds]);
   const allFilteredSelected = filteredCards.length > 0 && filteredCards.every((card) => selectedCardIds.has(card.id));
 
@@ -939,6 +976,56 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     setStudySettings((existing) => ({ ...existing, cardGroups: renameGroup(existing.cardGroups, name, next) }));
     setGroupFilter(`${GROUP_PREFIX}${merging ?? next}`);
     setNotice(merging && merging !== name ? `${name} merged into ${merging}.` : `Renamed to ${next}.`);
+  }
+
+  /**
+   * Renames a topic, or clears it, across every question carrying it.
+   *
+   * Unlike a group, a topic is part of the shared library, so this changes what your
+   * friend and every colleague sees, including on questions someone else uploaded. The
+   * confirmation says so. It is still safe: a question's identity is a hash of its exam
+   * code, prompt, choices and images, and the topic is not among them, so no rename can
+   * duplicate a question or strand anyone's labels.
+   */
+  async function applyTopicChange(from: string, to: string) {
+    setBusy(true);
+    try {
+      const { questions: nextQuestions, cards: nextCards } = await retopicQuestions(from, to);
+      setQuestions(nextQuestions);
+      setCards(nextCards);
+      setTopicFilter(to ? `${TOPIC_PREFIX}${to}` : ALL_TOPICS);
+      const count = topicCounts.get(from) ?? 0;
+      setNotice(to
+        ? `${from} renamed to ${to} on ${count} question${count === 1 ? "" : "s"}.`
+        : `${from} cleared from ${count} question${count === 1 ? "" : "s"}. The questions themselves are untouched.`);
+      cloud.request();
+    } catch (error) {
+      setNotice(`Could not change the topic: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleRenameTopic(name: string) {
+    const count = topicCounts.get(name) ?? 0;
+    const wanted = window.prompt(`Rename ${name} to:`, name);
+    if (wanted === null) return;
+    const next = normalizeTopicName(wanted);
+    if (!next || next === name) return;
+    const merging = findTopicName(examQuestions, next);
+    const shared = `This is part of the shared library, so it changes for everyone.`;
+    const question = merging && merging !== name
+      ? `${merging} already exists. Fold ${count} question${count === 1 ? "" : "s"} from ${name} into it?\n\n${shared}`
+      : `Rename ${name} to ${next} on ${count} question${count === 1 ? "" : "s"}?\n\n${shared}`;
+    if (!window.confirm(question)) return;
+    void applyTopicChange(name, merging ?? next);
+  }
+
+  /** Only the topic goes; the questions and everyone's labels on them stay. */
+  function handleClearTopic(name: string) {
+    const count = topicCounts.get(name) ?? 0;
+    if (!window.confirm(`Clear ${name} from ${count} question${count === 1 ? "" : "s"}?\n\nThe questions stay in the library with their labels. Only the topic goes, and it goes for everyone, since topics are part of the shared library.`)) return;
+    void applyTopicChange(name, "");
   }
 
   /** Only the grouping goes; the questions and your labels on them are untouched. */
@@ -1642,6 +1729,21 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 </select>
               </label>
               )}
+              {topicNames.length > 0 && (
+              <label className="group-filter">
+                <span>Topic</span>
+                <select
+                  value={topicFilter}
+                  onChange={(event) => { setTopicFilter(event.target.value); setSelectedCardIds(new Set()); }}
+                >
+                  <option value={ALL_TOPICS}>All topics ({examCards.length})</option>
+                  {topicNames.map((name) => (
+                    <option key={name} value={`${TOPIC_PREFIX}${name}`}>{name} ({topicCounts.get(name) ?? 0})</option>
+                  ))}
+                  {untopicedCount > 0 && <option value={UNTOPICED}>No topic ({untopicedCount})</option>}
+                </select>
+              </label>
+              )}
               <div className="label-filter" role="group" aria-label="Filter by label">
                 {LABEL_FILTERS.map(({ value, label }) => (
                   <button
@@ -1673,12 +1775,18 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                   onPick={addSelectedToGroup}
                 />
                 <button className="danger-button" disabled={busy || selectedCards.filter(canDeleteCard).length === 0} onClick={() => void handleRemove(selectedCards, "selected")}>Delete selected</button>
+                {activeGroup && <MoreMenu className="scope-menu" title={`What to do with the group ${activeGroup}`} label={<span>{activeGroup}</span>}>
+                  <button className="secondary compact" disabled={busy || selectedCards.length === 0} onClick={() => removeSelectedFromGroup(activeGroup)}>Remove selected from {activeGroup}</button>
+                  <button className="secondary compact" disabled={busy} onClick={() => handleRenameGroup(activeGroup)}>Rename group</button>
+                  <button className="danger-button" disabled={busy} onClick={() => handleDeleteGroup(activeGroup)}>Remove the group</button>
+                </MoreMenu>}
+                {activeTopic && <MoreMenu className="scope-menu" title={`What to do with the topic ${activeTopic}`} label={<span>{activeTopic}</span>}>
+                  {/* Shared, unlike a group, so both of these change what everyone sees. */}
+                  <p className="menu-hint">Topics are part of the shared library, so these change for everyone.</p>
+                  <button className="secondary compact" disabled={busy} onClick={() => handleRenameTopic(activeTopic)}>Rename topic</button>
+                  <button className="danger-button" disabled={busy} onClick={() => handleClearTopic(activeTopic)}>Clear this topic</button>
+                </MoreMenu>}
                 <MoreMenu className="danger-menu" title="Actions that cannot be undone" label="⋯">
-                  {activeGroup && <>
-                    <button className="secondary compact" disabled={busy || selectedCards.length === 0} onClick={() => removeSelectedFromGroup(activeGroup)}>Remove selected from {activeGroup}</button>
-                    <button className="secondary compact" disabled={busy} onClick={() => handleRenameGroup(activeGroup)}>Rename {activeGroup}</button>
-                    <button className="danger-button" disabled={busy} onClick={() => handleDeleteGroup(activeGroup)}>Remove the group {activeGroup}</button>
-                  </>}
                   <button className="danger-button" disabled={busy || examCards.length === 0} onClick={() => void handleReset()}>{examFilter === ALL_EXAMS ? "Reset all labels" : `Reset ${examFilter} labels`}</button>
                   <button className="danger-button danger-solid" disabled={busy || examCards.filter(canDeleteCard).length === 0} onClick={() => void handleRemove(examCards, "all")}>{examFilter === ALL_EXAMS ? "Delete all questions" : `Delete all ${examFilter} questions`}</button>
                 </MoreMenu>

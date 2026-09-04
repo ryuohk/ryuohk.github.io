@@ -1,4 +1,5 @@
 import { openDB, type DBSchema, type IDBPTransaction } from "idb";
+import { retagCardTopic, sameTopic } from "./topics";
 import { MasteryRating, type CapturedQuestion, type ReviewLog, type StudyCard } from "./types";
 
 /**
@@ -208,6 +209,48 @@ export async function restoreLibrary(questions: CapturedQuestion[], cards: Study
     ]),
     transaction.done,
   ]);
+}
+
+/**
+ * Renames a topic across every question carrying it, or clears it when `to` is empty.
+ *
+ * A topic lives in two places: on the question, and copied onto each of its cards as a
+ * tag beside the exam code. The copy is what shows under a question while you study, so
+ * both are rewritten together or the change appears not to have worked.
+ *
+ * Only shared library content is queued. Ratings, which are private and per person, are
+ * not touched by any of this: a question keeps its own label through a rename.
+ */
+export async function retopicQuestions(from: string, to: string, now = new Date()): Promise<{ questions: CapturedQuestion[]; cards: StudyCard[] }> {
+  const database = await databasePromise;
+  const transaction = database.transaction(["questions", "cards", "pending"], "readwrite");
+  const questions = await transaction.objectStore("questions").getAll();
+  const cards = await transaction.objectStore("cards").getAll();
+
+  const changedQuestions = questions
+    .filter((question) => sameTopic(question.topic, from))
+    .map((question): CapturedQuestion => ({ ...question, topic: to }));
+  const changedIds = new Set(changedQuestions.map((question) => question.id));
+  const changedCards = cards
+    .filter((card) => changedIds.has(card.questionId))
+    .map((card): StudyCard => ({ ...card, tags: retagCardTopic(card.tags, from, to), updatedAt: now.toISOString() }));
+
+  await Promise.all([
+    ...changedQuestions.map((question) => transaction.objectStore("questions").put(question)),
+    ...changedCards.map((card) => transaction.objectStore("cards").put(card)),
+    ...queue(transaction, [
+      ...changedQuestions.map((question): [PendingKind, string] => ["question", question.id]),
+      ...changedCards.map((card): [PendingKind, string] => ["card", card.id]),
+    ]),
+    transaction.done,
+  ]);
+
+  const questionById = new Map(changedQuestions.map((question) => [question.id, question]));
+  const cardById = new Map(changedCards.map((card) => [card.id, card]));
+  return {
+    questions: questions.map((question) => questionById.get(question.id) ?? question),
+    cards: cards.map((card) => cardById.get(card.id) ?? card),
+  };
 }
 
 export async function saveReview(card: StudyCard, review: ReviewLog): Promise<void> {
