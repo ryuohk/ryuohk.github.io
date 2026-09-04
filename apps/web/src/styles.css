@@ -78,6 +78,11 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .session-settings label:not(.checkbox-setting) { min-width: 120px; display: grid; gap: 5px; color: #66758b; font-size: 11px; font-weight: 750; }
 .session-settings select { min-height: 35px; border: 1px solid #d8deea; border-radius: 8px; padding: 6px 28px 6px 9px; color: #35445c; background: white; }
 .session-settings input[type="text"], .session-settings input[type="number"] { min-height: 35px; border: 1px solid #d8deea; border-radius: 8px; padding: 6px 9px; color: #35445c; background: white; }
+/* Smaller than the mode tabs above it: this picks how much of one mode to take, and
+   sizing it the same would read as a second, competing choice of mode. */
+.scope-tabs { display: inline-flex; gap: 4px; padding: 4px; border-radius: 9px; background: #f0f3f8; }
+.scope-tabs button { border: 0; border-radius: 6px; padding: 7px 11px; color: #627087; background: transparent; font-size: 12px; font-weight: 750; white-space: nowrap; }
+.scope-tabs button.active { color: #185ac5; background: white; box-shadow: 0 2px 8px #17243a14; }
 .pool-count { margin-left: auto; align-self: center; color: #778499; font-size: 12px; white-space: nowrap; }
 .running-session { gap: 9px; }
 /* Destructive actions stack in their own panel rather than sitting in the toolbar. */
@@ -198,6 +203,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .empty-icon { width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; color: #087a55; background: #dcf8ee; font-size: 27px; }
 .empty-state h2 { margin-bottom: 4px; }
 .empty-state p { max-width: 440px; margin: 0 0 22px; color: #6d7a8f; }
+/* Says what the button is about to do, so it sits right above it rather than with the
+   explanatory copy, and stays quieter than that copy. */
+.empty-state p.empty-note { margin: -12px 0 18px; color: #8a94a6; font-size: 13px; }
 /* Left aligned inside a centred block: numbered steps are read, not scanned, and
    centring them makes each line start in a different place. */
 .empty-steps { max-width: 460px; margin: 4px 0 22px; padding-left: 22px; color: #6d7a8f; font-size: 14px; line-height: 1.65; text-align: left; }

@@ -7,6 +7,7 @@ import {
   evaluateAnswer,
   filterEasyReviewPool,
   filterMasteryPool,
+  planEasyReview,
   planMasteryAdditions,
   reviseStudyResult,
   selectMasteryAdditions,
@@ -20,6 +21,9 @@ const settings: StudySettings = {
   masterySetSize: 2,
   shuffleChoices: false,
   masteryPool: "all-not-easy",
+  // The size tests below are about what a part contains, so they opt into parts.
+  // Coverage of the default, which takes the whole pool, is its own test.
+  easyReviewScope: "batch",
   easyReviewSize: 2,
   masteryCardIds: [],
   speakQuestions: false,
@@ -136,6 +140,44 @@ describe("mastery study sessions", () => {
     // Which two are reviewed is decided by age; the order they arrive in is not.
     const session = createStudySession(cards, settings, "easy-review");
     expect(new Set(session.order)).toEqual(new Set(["oldest", "middle"]));
+  });
+
+  // The heading counts what is ready and the button sits under it, so pressing it has
+  // to produce that many questions. A stored part size used to shrink this silently.
+  it("reviews the whole ready pool by default", () => {
+    const cards = ["a", "b", "c", "d", "e"].map((id, index) => card(id, MasteryRating.Easy, `2026-08-0${index + 1}T00:00:00.000Z`));
+    const session = createStudySession(cards, { ...settings, easyReviewScope: "all" }, "easy-review");
+
+    expect(session.total).toBe(5);
+    expect(new Set(session.order)).toEqual(new Set(["a", "b", "c", "d", "e"]));
+  });
+
+  it("counts the parts a batched review takes to cover the pool", () => {
+    const batched = { ...settings, easyReviewScope: "batch" as const, easyReviewSize: 20 };
+
+    expect(planEasyReview(57, batched)).toEqual({ sessionSize: 20, parts: 3 });
+    // A part larger than what is left is not a promise of questions that do not exist.
+    expect(planEasyReview(8, batched)).toEqual({ sessionSize: 8, parts: 1 });
+    expect(planEasyReview(57, { ...settings, easyReviewScope: "all" })).toEqual({ sessionSize: 57, parts: 1 });
+    expect(planEasyReview(0, { ...settings, easyReviewScope: "all" })).toEqual({ sessionSize: 0, parts: 0 });
+  });
+
+  /**
+   * Parts carry on rather than repeat, and nothing is stored to make that happen: a
+   * reviewed question is stamped with the time it was rated, which drops it to the
+   * back of an oldest-first pool. This is the behaviour the "In parts" control sells.
+   */
+  it("starts the next part where the previous one stopped", () => {
+    const batched = { ...settings, easyReviewScope: "batch" as const, easyReviewSize: 2 };
+    const cards = ["a", "b", "c", "d"].map((id, index) => card(id, MasteryRating.Easy, `2026-08-0${index + 1}T00:00:00.000Z`));
+    const firstPart = createStudySession(cards, batched, "easy-review");
+    expect(new Set(firstPart.order)).toEqual(new Set(["a", "b"]));
+
+    const reviewed = cards.map((existing) => firstPart.order.includes(existing.id)
+      ? { ...existing, ratingUpdatedAt: "2026-09-01T00:00:00.000Z" }
+      : existing);
+
+    expect(new Set(createStudySession(reviewed, batched, "easy-review").order)).toEqual(new Set(["c", "d"]));
   });
 
   // Selecting by age alone would replay the same sequence every time, which turns the

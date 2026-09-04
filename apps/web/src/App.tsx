@@ -46,6 +46,7 @@ import {
   filterEasyReviewPool,
   filterMasteryPool,
   normalizeAnswerLabel,
+  planEasyReview,
   planMasteryAdditions,
   selectMasteryAdditions,
   setSessionAnswer,
@@ -69,6 +70,9 @@ const DEFAULT_STUDY_SETTINGS: StudySettings = {
   masterySetSize: 5,
   shuffleChoices: false,
   masteryPool: "all-not-easy",
+  // Everything that is ready, unless you ask for parts. The heading counts the ready
+  // pool, so Start review has to hand you that pool and not a silent slice of it.
+  easyReviewScope: "all",
   easyReviewSize: 20,
   masteryCardIds: [],
   speakQuestions: false,
@@ -120,6 +124,10 @@ function readStudySettings(session: StudySession | null = null): StudySettings {
       // the same questions, so the choice was removed. Reading a stored "again-hard"
       // would quietly hide questions carrying the retired Good, which are in the pool.
       masteryPool: "all-not-easy",
+      // Absent in anything saved before parts existed, and those settings were carrying
+      // a size that was applied whether or not anyone had chosen it. Reading a missing
+      // value as "all" is what turns that stale 20 back into the whole ready pool.
+      easyReviewScope: stored.easyReviewScope === "batch" ? "batch" : "all",
       easyReviewSize: normalizeQuestionCount(stored.easyReviewSize, migratedCount),
       masteryCardIds: [...new Set([...masteryCardIds, ...legacySessionIds])],
       speakQuestions: stored.speakQuestions === true,
@@ -382,6 +390,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     [examCards, masteryPoolIds, studySettings.masteryPool],
   );
   const easyPool = useMemo(() => filterEasyReviewPool(examCards), [examCards]);
+  const easyReviewPlan = useMemo(() => planEasyReview(easyPool.length, studySettings), [easyPool.length, studySettings]);
   useEffect(() => {
     // Guard on examCodes being populated. On a device whose library has not synced
     // yet, examCodes is briefly empty, and without this the restored or adopted
@@ -505,6 +514,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
             // A backup predating either preference carries none, so keep this device's.
             shuffleChoices: restored.shuffleChoices ?? existing.shuffleChoices,
             masteryPool: restored.masteryPool === "again-hard" ? "again-hard" : "all-not-easy",
+            easyReviewScope: restored.easyReviewScope === "batch" ? "batch" : "all",
             easyReviewSize: normalizeQuestionCount(restored.easyReviewSize, count),
             masteryCardIds: normalizeCardIds(restored.masteryCardIds),
             speakQuestions: restored.speakQuestions ?? existing.speakQuestions,
@@ -998,12 +1008,28 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                   />
                   <span className="pool-count">{currentMasteryPool.length} in pool · {masteryAdditionsAvailable.length} available to add</span>
                 </> : <>
-                  <CountField
-                    label="Questions to review"
-                    value={studySettings.easyReviewSize}
-                    onCommit={(easyReviewSize) => setStudySettings((existing) => ({ ...existing, easyReviewSize }))}
-                  />
-                  <span className="pool-count">{easyPool.length} to review</span>
+                  <div className="scope-tabs" role="group" aria-label="How much to review">
+                    <button
+                      className={studySettings.easyReviewScope === "all" ? "active" : ""}
+                      aria-pressed={studySettings.easyReviewScope === "all"}
+                      onClick={() => setStudySettings((existing) => ({ ...existing, easyReviewScope: "all" }))}
+                    >All {easyPool.length}</button>
+                    <button
+                      className={studySettings.easyReviewScope === "batch" ? "active" : ""}
+                      aria-pressed={studySettings.easyReviewScope === "batch"}
+                      onClick={() => setStudySettings((existing) => ({ ...existing, easyReviewScope: "batch" }))}
+                    >In parts</button>
+                  </div>
+                  {studySettings.easyReviewScope === "batch" && (
+                    <CountField
+                      label="Questions per part"
+                      value={studySettings.easyReviewSize}
+                      onCommit={(easyReviewSize) => setStudySettings((existing) => ({ ...existing, easyReviewSize }))}
+                    />
+                  )}
+                  <span className="pool-count">{studySettings.easyReviewScope === "batch"
+                    ? `${easyReviewPlan.sessionSize} this session · ${easyReviewPlan.parts} part${easyReviewPlan.parts === 1 ? "" : "s"} to cover all ${easyPool.length}`
+                    : `${easyPool.length} to review`}</span>
                 </>}
                 {studyMode === "mastery" ? <>
                   <button className="primary compact" disabled={currentMasteryPool.length === 0} onClick={() => startStudySession("mastery")}>Study current pool</button>
@@ -1119,7 +1145,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 <div><span className="metric">{studySession.attempts}</span><small>attempts</small></div>
               </> : <>
                 <div><span className="metric">{studyMode === "mastery" ? currentMasteryPool.length : easyPool.length}</span><small>{studyMode === "mastery" ? "in pool" : "available"}</small></div>
-                <div><span className="metric">{studyMode === "mastery" ? masteryAdditionsAvailable.length : studySettings.easyReviewSize}</span><small>{studyMode === "mastery" ? "available to add" : "set target"}</small></div>
+                <div><span className="metric">{studyMode === "mastery" ? masteryAdditionsAvailable.length : easyReviewPlan.sessionSize}</span><small>{studyMode === "mastery" ? "available to add" : "this session"}</small></div>
               </>}
             </div>
 
@@ -1253,7 +1279,10 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                     <div className="empty-icon">◉</div>
                     <h2>{easyPool.length} question{easyPool.length === 1 ? "" : "s"} ready to review</h2>
                     <p>Review asks what you have not seen in longest, first. Answer <strong>Not yet</strong> on anything shaky and it goes back into your Mastery pool.</p>
-                    <button className="primary" onClick={() => startStudySession("easy-review")}>Start review</button>
+                    {studySettings.easyReviewScope === "batch" && (
+                      <p className="empty-note">Set to parts of {studySettings.easyReviewSize}, so this session takes {easyReviewPlan.sessionSize} and the next one carries on from there.</p>
+                    )}
+                    <button className="primary" onClick={() => startStudySession("easy-review")}>Start review{studySettings.easyReviewScope === "batch" ? ` · ${easyReviewPlan.sessionSize}` : ""}</button>
                   </>
                 ) : (
                   <>

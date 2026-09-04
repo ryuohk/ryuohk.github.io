@@ -2,12 +2,23 @@ import { MasteryRating, type MasteryRating as MasteryRatingValue, type StudyCard
 
 export type StudyMode = "mastery" | "easy-review";
 export type MasteryPool = "all-not-easy" | "again-hard";
+export type EasyReviewScope = "all" | "batch";
 
 export interface StudySettings {
   masterySetSize: number;
   /** Present answer choices in a random order, so their position cannot be learned. */
   shuffleChoices: boolean;
   masteryPool: MasteryPool;
+  /**
+   * Whether a review takes the whole ready pool or one part of it.
+   *
+   * "all" is the default, because the number on the empty-state heading is the number
+   * of questions that are ready and pressing Start should hand you exactly those. A
+   * fixed size used to be applied silently, so a pool of 57 quietly became a session
+   * of 20 with nothing on screen to say the other 37 had been left behind.
+   */
+  easyReviewScope: EasyReviewScope;
+  /** Questions per part. Only read when the scope is "batch". */
   easyReviewSize: number;
   masteryCardIds: string[];
   /** Read each question aloud as it appears. Syncs, so it follows you between devices. */
@@ -69,6 +80,27 @@ export function filterMasteryPool(cards: readonly StudyCard[], pool: MasteryPool
     }
     return true;
   });
+}
+
+export interface EasyReviewPlan {
+  /** How many questions the next session will ask. */
+  sessionSize: number;
+  /** How many sessions of that size it takes to cover the whole ready pool. */
+  parts: number;
+}
+
+/**
+ * Works out how much of the ready pool one review session takes.
+ *
+ * Reviewing in parts relies on nothing more than the pool's own ordering: questions
+ * are chosen oldest-rated first, and answering one stamps it with the current time,
+ * which sends it to the back. So the next part picks up where this one stopped
+ * without anything having to be remembered between sessions.
+ */
+export function planEasyReview(poolSize: number, settings: StudySettings): EasyReviewPlan {
+  if (settings.easyReviewScope !== "batch") return { sessionSize: poolSize, parts: poolSize ? 1 : 0 };
+  const size = Math.max(1, Math.floor(settings.easyReviewSize));
+  return { sessionSize: Math.min(size, poolSize), parts: Math.ceil(poolSize / size) };
 }
 
 export function filterEasyReviewPool(cards: readonly StudyCard[]): StudyCard[] {
@@ -163,7 +195,8 @@ export function createStudySession(
     // Chosen oldest first, so a review works through what you have not seen in
     // longest, but played in a random order: the selection rule alone would walk the
     // same sequence every time and turn the running order itself into a memory aid.
-    candidates = shuffleItems(filterEasyReviewPool(cards).slice(0, settings.easyReviewSize), random);
+    const pool = filterEasyReviewPool(cards);
+    candidates = shuffleItems(pool.slice(0, planEasyReview(pool.length, settings).sessionSize), random);
   }
   const order = candidates.map((card) => card.id);
   return {
