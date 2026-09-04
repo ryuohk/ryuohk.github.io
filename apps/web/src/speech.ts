@@ -2,19 +2,30 @@
  * Reading questions aloud with the browser's built-in speech synthesis.
  *
  * The whole feature hinges on one quirk: Chrome silently truncates a single
- * utterance after roughly fifteen seconds, which at a normal reading pace is about
- * 200 characters. It fails with no error and no `end` event, so a question simply
- * stops mid-sentence. Since the median question here runs to seventy words, nearly
- * every one would be cut off if spoken as a single utterance.
+ * utterance after roughly fifteen seconds. It fails with no error and no `end` event,
+ * so a question simply stops mid-sentence. Since the median question here runs to
+ * seventy words, nearly every one would be cut off if spoken as a single utterance.
  *
  * The fix is to split the text at sentence boundaries and chain the pieces on each
  * other's `end` event. The alternative doing the rounds, calling `resume()` on a
  * timer, works on desktop Chrome but breaks on Android, which is the platform that
  * matters here.
+ *
+ * Splitting is a cost as well as a fix, because every seam is an audible gap, so the
+ * pieces are as long as that ceiling allows and are cut only where a break sounds
+ * deliberate: the end of a sentence, a colon, a line break, or a list marker.
  */
 
-/** Hard ceiling. Past roughly this length Chrome cuts the utterance off silently. */
-const MAX_CHUNK_CHARS = 180;
+/**
+ * Hard ceiling. Past roughly this length Chrome cuts the utterance off silently.
+ *
+ * Not a documented number. The truncation is time-based, around fifteen seconds, so
+ * the safe character count moves with the speaking rate: at 2x this is comfortable and
+ * at 0.5x it is not. Set from listening rather than derived, and the failure it guards
+ * against is loud and obvious, a question stopping dead mid-sentence, so if that starts
+ * happening at a slow rate this is the number to bring back down.
+ */
+const MAX_CHUNK_CHARS = 360;
 
 /**
  * Preferred length, just under the ceiling.
@@ -22,15 +33,14 @@ const MAX_CHUNK_CHARS = 180;
  * Every boundary between pieces is an audible gap. The engine needs a moment to start
  * an utterance, and no amount of queueing ahead removes that entirely, so the only real
  * control over how choppy a question sounds is how few pieces it is cut into. On a
- * typical question 170 gives five seams; 90 gives thirteen, and that is plainly worse
- * to listen to.
+ * typical question 300 gives two or three seams where 170 gave five.
  *
- * This was briefly set to 90 for a different reason: a restart replays the piece in
+ * This was once set to 90 for a different reason: a restart replays the piece in
  * flight, so a shorter piece meant a shorter rewind on pause or a speed change. Reading
  * the engine's boundary events made that argument mostly moot, because a restart now
  * resumes at the word rather than the top of the piece. Fewer, longer pieces win.
  */
-const TARGET_CHUNK_CHARS = 170;
+const TARGET_CHUNK_CHARS = 300;
 
 /**
  * How many pieces are handed to the engine ahead of the one playing.
@@ -91,16 +101,40 @@ export function isSpeechSupported(): boolean {
 }
 
 /**
- * Sentence boundaries, ignoring the period after a choice label.
+ * Bullets, turned into the line breaks they already are.
  *
- * "A." is not the end of a sentence, and treating it as one strands the letter on the
- * end of the previous piece: you hear "Choices. A." and then, after the seam, the text
- * of choice A with "B." tacked on. The negative lookbehind skips a full stop or colon
- * that follows a lone letter, which is what a label is and what an ordinary word
- * ending a sentence is not.
+ * A bullet marks the start of an item, which is the same boundary a newline marks, and
+ * captured prompts carry requirement lists written both ways. Replacing the marker
+ * rather than splitting around it also keeps the glyph out of the speech: engines vary
+ * between saying nothing for "•" and announcing it, and neither belongs in the middle
+ * of a requirement.
+ *
+ * Only a dash or asterisk that opens a line counts. Mid-sentence they are punctuation
+ * and a hyphenated word would otherwise be read as two list items.
+ */
+function normalizeListMarkers(text: string): string {
+  return text
+    .replace(/[•‣▪▫●○◦⁃∙]+[ \t]*/g, "\n")
+    .replace(/^[ \t]*[-*–—][ \t]+/gm, "\n");
+}
+
+/**
+ * Boundaries to break on: a full stop, a colon, a line break, or a list marker.
+ *
+ * Colons earn their place because captured prompts are full of "Requirements:" and
+ * "You need to:" headings, and running one into the list it introduces sounds wrong.
+ * Commas and semicolons are deliberately not here. They are frequent enough that
+ * honouring them would cut a question into far more pieces than the length calls for,
+ * which is what made reading sound choppy. They survive as a fallback in
+ * `chunkForSpeech`, used only when a single sentence overruns on its own.
+ *
+ * The negative lookbehind skips the stop after a choice label. "A." is not the end of
+ * a sentence, and treating it as one strands the letter on the end of the previous
+ * piece: you hear "Choices. A." and then, after the seam, the text of choice A with
+ * "B." tacked on.
  */
 function splitSentences(text: string): string[] {
-  return text
+  return normalizeListMarkers(text)
     .split(/(?<=[.!?:])(?<!(?:^|\s)[A-Za-z][.:])\s+|\n+/)
     .map((part) => part.trim())
     .filter(Boolean);

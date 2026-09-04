@@ -14,11 +14,11 @@ import {
   speakText,
 } from "./speech";
 
-// Chrome truncates a single utterance at roughly 200 characters with no error, so
-// every chunk staying under the limit is the whole point of this module.
-const LIMIT = 180;
+// Chrome truncates a long utterance with no error, so every chunk staying under the
+// limit is the whole point of this module.
+const LIMIT = 360;
 // Pieces are packed to this; a single sentence may run to LIMIT before it is broken.
-const TARGET = 170;
+const TARGET = 300;
 
 describe("chunkForSpeech", () => {
   it("returns nothing for empty or whitespace text", () => {
@@ -39,9 +39,9 @@ describe("chunkForSpeech", () => {
   });
 
   it("breaks at sentence boundaries rather than mid-word", () => {
-    const chunks = chunkForSpeech(`${"a".repeat(120)}. ${"b".repeat(120)}.`);
+    const chunks = chunkForSpeech(`${"a".repeat(220)}. ${"b".repeat(220)}.`);
     expect(chunks).toHaveLength(2);
-    expect(chunks[0]).toBe(`${"a".repeat(120)}.`);
+    expect(chunks[0]).toBe(`${"a".repeat(220)}.`);
   });
 
   it("falls back to clause punctuation when a sentence is too long", () => {
@@ -83,10 +83,10 @@ describe("chunkForSpeech", () => {
 
   it("cuts a long question into a handful of pieces, not a dozen", () => {
     const sentence = "The platform must ingest telemetry from twelve thousand devices. ";
-    const chunks = chunkForSpeech(sentence.repeat(8));
+    const chunks = chunkForSpeech(sentence.repeat(12));
 
-    // Two of these fit in a piece, so eight sentences make four, not eight.
-    expect(chunks).toHaveLength(4);
+    // Four of these fit in a piece, so twelve sentences make three, not twelve.
+    expect(chunks).toHaveLength(3);
     for (const chunk of chunks) expect(chunk.length).toBeLessThanOrEqual(LIMIT);
   });
 
@@ -109,9 +109,42 @@ describe("chunkForSpeech", () => {
     expect(chunkForSpeech("Overview:\nContoso runs two datacenters.").length).toBeGreaterThan(0);
   });
 
+  // A bullet marks the start of an item, which is the boundary a newline marks, and
+  // captured requirement lists are written both ways.
+  it("breaks on bullets the way it breaks on lines", () => {
+    // Long enough that two items cannot share a piece, so a piece has to start at one.
+    const item = (label: string) => `${label} ${"requirement text that runs on for a while ".repeat(7).trim()}`;
+    const chunks = chunkForSpeech(`Requirements: • ${item("Alpha")} • ${item("Bravo")}`);
+
+    expect(chunks.some((chunk) => chunk.startsWith("Alpha"))).toBe(true);
+    expect(chunks.some((chunk) => chunk.startsWith("Bravo"))).toBe(true);
+    for (const chunk of chunks) expect(chunk.length).toBeLessThanOrEqual(LIMIT);
+  });
+
+  it("does not read the bullet glyph out", () => {
+    const spoken = chunkForSpeech("Requirements:\n• Minimize cost.\n• Survive an outage.").join(" ");
+
+    expect(spoken).not.toContain("•");
+    expect(spoken).toContain("Minimize cost.");
+    expect(spoken).toContain("Survive an outage.");
+  });
+
+  // A dash opening a line is a bullet; the one inside "multi-region" is not.
+  it("tells a list dash from a hyphen", () => {
+    expect(chunkForSpeech("- Minimize cost.\n- Survive an outage.").join(" ")).not.toMatch(/(?:^|\s)-\s/);
+    expect(chunkForSpeech("Deploy a multi-region design.")).toEqual(["Deploy a multi-region design."]);
+  });
+
+  // Commas are frequent enough that honouring them cuts a question into far more
+  // pieces than its length calls for, and every extra piece is an audible gap.
+  it("does not break on a comma while the sentence still fits", () => {
+    const text = "Contoso operates two datacenters, one in Seattle and one in Dallas, connected by a private link.";
+    expect(chunkForSpeech(text)).toEqual([text]);
+  });
+
   it("keeps a sentence with no clause punctuation whole up to the ceiling", () => {
     // Over the packing target but under the ceiling, and with nowhere good to break.
-    const sentence = `${"word ".repeat(35).trim()}.`;
+    const sentence = `${"word ".repeat(65).trim()}.`;
     expect(sentence.length).toBeGreaterThan(TARGET);
     expect(sentence.length).toBeLessThanOrEqual(LIMIT);
     expect(chunkForSpeech(sentence)).toEqual([sentence]);
@@ -284,7 +317,11 @@ const texts = () => spoken.map((utterance) => utterance.text);
 // Long enough to be split, which is the only case any of this matters in.
 const sentence = (label: string) =>
   `${label} sentence in a question long enough that a browser would otherwise truncate it partway through.`;
-const question = [sentence("First"), sentence("Second"), sentence("Third"), sentence("Fourth")].join(" ");
+// Eight of them, because a piece now holds two: four sentences would be two pieces,
+// which is too few for the queue-ahead depth to be visible in what the engine is given.
+const question = ["First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Seventh", "Eighth"]
+  .map(sentence)
+  .join(" ");
 
 /**
  * Queueing ahead of the piece that is playing.
