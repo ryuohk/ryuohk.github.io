@@ -20,6 +20,14 @@ export interface StudySettings {
   easyReviewScope: EasyReviewScope;
   /** Questions per part. Only read when the scope is "batch". */
   easyReviewSize: number;
+  /**
+   * Sweep questions marked Got it into a review as well.
+   *
+   * Off by default, because Got it is how you say you are finished with a question and
+   * a review that ignored that would leave the label doing nothing. Worth turning on
+   * for a last pass before an exam.
+   */
+  reviewIncludesGotIt: boolean;
   masteryCardIds: string[];
   /** Your own groupings of related questions. See CardGroups. */
   cardGroups: CardGroups;
@@ -74,9 +82,21 @@ export function shuffleItems<T>(items: readonly T[], random = Math.random): T[] 
   return shuffled;
 }
 
+/**
+ * Whether saying this about a question takes it out of the Mastery pool.
+ *
+ * The two strongest labels both do. They differ in where the question goes next, not
+ * in whether you are still drilling it, and every place that used to compare against
+ * a single "Easy" now has two answers to consider. One predicate, so adding a fourth
+ * state later is one edit rather than a hunt.
+ */
+export function leavesMasteryPool(rating: MasteryRatingValue | null): boolean {
+  return rating === MasteryRating.KeepFresh || rating === MasteryRating.GotIt;
+}
+
 export function filterMasteryPool(cards: readonly StudyCard[], pool: MasteryPool): StudyCard[] {
   return cards.filter((card) => {
-    if (card.masteryRating === MasteryRating.Easy) return false;
+    if (leavesMasteryPool(card.masteryRating)) return false;
     if (pool === "again-hard") {
       return card.masteryRating === MasteryRating.Again || card.masteryRating === MasteryRating.Hard;
     }
@@ -204,11 +224,11 @@ export function filterUngroupedCards(cards: readonly StudyCard[], groups: CardGr
   return cards.filter((card) => !grouped.has(card.id));
 }
 
-export type CardLabel = "not-yet" | "got-it" | "unrated";
+export type CardLabel = "not-yet" | "keep-fresh" | "got-it" | "unrated";
 export type LabelFilter = CardLabel | "all";
 
 /**
- * Which of the three labels the library shows a question under.
+ * Which label the library shows a question under.
  *
  * The retired Hard and Good ratings read as Not yet, as they do everywhere else: they
  * always behaved as in-pool, and a filter that gave them a category of their own would
@@ -216,7 +236,8 @@ export type LabelFilter = CardLabel | "all";
  */
 export function cardLabel(card: StudyCard): CardLabel {
   if (card.masteryRating === null || card.masteryRating === undefined) return "unrated";
-  return card.masteryRating === MasteryRating.Easy ? "got-it" : "not-yet";
+  if (card.masteryRating === MasteryRating.GotIt) return "got-it";
+  return card.masteryRating === MasteryRating.KeepFresh ? "keep-fresh" : "not-yet";
 }
 
 export function filterCardsByLabel(cards: readonly StudyCard[], label: LabelFilter): StudyCard[] {
@@ -226,7 +247,7 @@ export function filterCardsByLabel(cards: readonly StudyCard[], label: LabelFilt
 
 /** Counts for every label at once, so the filter can say what each one holds. */
 export function countCardsByLabel(cards: readonly StudyCard[]): Record<LabelFilter, number> {
-  const counts: Record<LabelFilter, number> = { all: cards.length, "not-yet": 0, "got-it": 0, unrated: 0 };
+  const counts: Record<LabelFilter, number> = { all: cards.length, "not-yet": 0, "keep-fresh": 0, "got-it": 0, unrated: 0 };
   for (const card of cards) counts[cardLabel(card)] += 1;
   return counts;
 }
@@ -252,9 +273,18 @@ export function planEasyReview(poolSize: number, settings: StudySettings): EasyR
   return { sessionSize: Math.min(size, poolSize), parts: Math.ceil(poolSize / size) };
 }
 
-export function filterEasyReviewPool(cards: readonly StudyCard[]): StudyCard[] {
+/**
+ * What a review session can draw from, oldest-rated first.
+ *
+ * Keep fresh is the label that asks to be reviewed, so it is the whole pool by
+ * default. Got it means you are finished with a question, and sweeping those back in
+ * would make the label mean nothing, so including them is a deliberate choice: turn it
+ * on before an exam, when everything is worth one more pass.
+ */
+export function filterReviewPool(cards: readonly StudyCard[], includeGotIt = false): StudyCard[] {
   return cards
-    .filter((card) => card.masteryRating === MasteryRating.Easy)
+    .filter((card) => card.masteryRating === MasteryRating.KeepFresh
+      || (includeGotIt && card.masteryRating === MasteryRating.GotIt))
     .sort((left, right) => (left.ratingUpdatedAt ?? "").localeCompare(right.ratingUpdatedAt ?? ""));
 }
 
@@ -263,7 +293,7 @@ function uniqueCardIds(cardIds: readonly string[]): string[] {
 }
 
 export function cleanMasteryCardIds(cards: readonly StudyCard[], cardIds: readonly string[]): string[] {
-  const activeIds = new Set(cards.filter((card) => card.masteryRating !== MasteryRating.Easy).map((card) => card.id));
+  const activeIds = new Set(cards.filter((card) => !leavesMasteryPool(card.masteryRating)).map((card) => card.id));
   return uniqueCardIds(cardIds).filter((cardId) => activeIds.has(cardId));
 }
 
@@ -286,16 +316,17 @@ export interface MasteryAdditionPlan {
   add: string[];
   /** Selected but already pooled. Harmless, and worth saying so rather than counting twice. */
   alreadyPooled: string[];
-  /** Marked Got it, so their label has to be cleared or the pool will shed them again. */
+  /** Already out of the pool, so their label has to be cleared or it sheds them again. */
   unretire: string[];
 }
 
 /**
  * Works out what adding a hand-picked set of questions to the Mastery pool involves.
  *
- * The pool holds what you have not got yet, and every sync strips anything marked Got
- * it out of it. So a question you already know cannot simply be put back: its label has
- * to go first, or it would appear to be added and then quietly vanish. Choosing a
+ * The pool holds what you have not got yet, and every sync strips anything labelled
+ * Keep fresh or Got it out of it. So a question you already know cannot simply be put
+ * back: its label has to go first, or it would appear to be added and then quietly
+ * vanish. Choosing a
  * question from the library is a deliberate "drill this again", which is exactly what
  * clearing the label means, but it is a change to your ratings and the caller is
  * expected to say so rather than do it silently.
@@ -307,7 +338,7 @@ export function planMasteryAdditions(
   const pooled = new Set(masteryCardIds);
   const plan: MasteryAdditionPlan = { add: [], alreadyPooled: [], unretire: [] };
   for (const card of selected) {
-    if (card.masteryRating === MasteryRating.Easy) plan.unretire.push(card.id);
+    if (leavesMasteryPool(card.masteryRating)) plan.unretire.push(card.id);
     if (pooled.has(card.id)) plan.alreadyPooled.push(card.id);
     else plan.add.push(card.id);
   }
@@ -321,7 +352,7 @@ export function updateMasteryCardIds(
   rating: MasteryRatingValue,
 ): string[] {
   const current = uniqueCardIds(cardIds);
-  if (rating === MasteryRating.Easy) return current.filter((id) => id !== cardId);
+  if (leavesMasteryPool(rating)) return current.filter((id) => id !== cardId);
   if (mode === "mastery" || rating === MasteryRating.Again) return uniqueCardIds([...current, cardId]);
   return current;
 }
@@ -344,7 +375,7 @@ export function createStudySession(
     // Chosen oldest first, so a review works through what you have not seen in
     // longest, but played in a random order: the selection rule alone would walk the
     // same sequence every time and turn the running order itself into a memory aid.
-    const pool = filterEasyReviewPool(cards);
+    const pool = filterReviewPool(cards, settings.reviewIncludesGotIt);
     candidates = shuffleItems(pool.slice(0, planEasyReview(pool.length, settings).sessionSize), random);
   }
   const order = candidates.map((card) => card.id);
@@ -395,10 +426,12 @@ export function setSessionAnswer(session: StudySession, cardId: string, selected
 /**
  * Replaces the rating on an already-answered question and repairs the queue.
  *
- * Reached by stepping back through history, usually to correct a misclick. The
- * queue has to follow: a question re-rated below Easy was previously removed from
- * the set and has to come back, and one raised to Easy has to leave. Ratings inside
- * an Easy review never change queue membership, since every answer there completes.
+ * Reached by stepping back through history, usually to correct a misclick. The queue
+ * has to follow: a question re-rated back into the Mastery pool was removed from the
+ * set and has to come back, and one raised out of the pool has to leave. Which of the
+ * two labels above the pool it was given makes no difference here; only whether it is
+ * still being drilled does. Ratings inside a review never change queue membership,
+ * since every answer there completes.
  *
  * `answeredAt` is deliberately left alone so history keeps its original order and
  * stepping back does not shuffle under you.
@@ -412,8 +445,8 @@ export function reviseStudyResult(
   if (!previous || previous.rating === rating) return session;
 
   const results = session.results.map((result, index) => (index === resultIndex ? { ...result, rating } : result));
-  const wasCompleted = session.mode === "easy-review" || previous.rating === MasteryRating.Easy;
-  const nowCompleted = session.mode === "easy-review" || rating === MasteryRating.Easy;
+  const wasCompleted = session.mode === "easy-review" || leavesMasteryPool(previous.rating);
+  const nowCompleted = session.mode === "easy-review" || leavesMasteryPool(rating);
   if (wasCompleted === nowCompleted) return { ...session, results };
 
   const inQueue = session.queue.includes(previous.cardId);
@@ -439,7 +472,7 @@ export function advanceStudySession(
 ): StudySession {
   if (session.queue[0] !== cardId) return session;
   const remaining = session.queue.slice(1);
-  const completed = session.mode === "easy-review" || rating === MasteryRating.Easy;
+  const completed = session.mode === "easy-review" || leavesMasteryPool(rating);
   if (!completed) remaining.push(cardId);
   const result: StudyResult = {
     cardId,

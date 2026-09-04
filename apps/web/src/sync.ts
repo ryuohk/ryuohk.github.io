@@ -101,6 +101,12 @@ export function describeSyncError(problem: unknown): string {
   if (problem instanceof Error && problem.message) return problem.message;
   if (problem && typeof problem === "object") {
     const detail = problem as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown };
+    // The one schema mismatch the app can name outright. A rating the database has
+    // not been widened for stops the queue draining, and "violates check constraint"
+    // gives no clue that the fix is a migration rather than anything on this device.
+    if (typeof detail.message === "string" && /mastery_rating_check|reviews_rating_check/.test(detail.message)) {
+      return "This library's database has not been updated for the Got it label yet. Apply the latest migration in supabase/migrations, then sync again.";
+    }
     const text = [detail.message, detail.details, detail.hint]
       .filter((part): part is string => typeof part === "string" && part.trim() !== "")
       .map((part) => part.trim())

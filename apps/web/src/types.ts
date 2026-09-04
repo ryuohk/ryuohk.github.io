@@ -59,11 +59,34 @@ export interface GeneratedCard {
 }
 
 
+/**
+ * What you said about a question the last time you were asked it.
+ *
+ * The numbers are the storage format and never change meaning, because they are
+ * already written on every device and in the cloud. The names have changed twice as
+ * the app's model did, so read the number, not the history:
+ *
+ *   1  Again      -> Not yet.    Stays in the Mastery pool and comes round again.
+ *   2  Hard       -> retired. Written by builds before the labels were cut to two.
+ *   3  Good       -> retired, likewise. Both read as Not yet, which is how they
+ *                    always behaved: neither ever left the pool.
+ *   4  KeepFresh  -> Keep fresh. Leaves the Mastery pool and joins the Review queue.
+ *                    This was called Easy, and before that it was Anki's Easy button.
+ *                    Every question already marked with it keeps behaving exactly as
+ *                    it did, which is why the middle rung reuses this number rather
+ *                    than the new one.
+ *   5  GotIt      -> Got it. Leaves the pool and is not reviewed either, unless you
+ *                    ask for it. New, so nothing carries it until you press it.
+ *
+ * Ordered weakest to strongest, and the database checks the range, so a new state
+ * has to be added at the end and the check widened to match.
+ */
 export const MasteryRating = {
   Again: 1,
   Hard: 2,
   Good: 3,
-  Easy: 4,
+  KeepFresh: 4,
+  GotIt: 5,
 } as const;
 
 export type MasteryRating = typeof MasteryRating[keyof typeof MasteryRating];

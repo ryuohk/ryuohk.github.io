@@ -49,9 +49,10 @@ import {
   evaluateAnswer,
   filterCardsByGroup,
   filterCardsByLabel,
-  filterEasyReviewPool,
+  filterReviewPool,
   filterMasteryPool,
   filterUngroupedCards,
+  leavesMasteryPool,
   findGroupName,
   groupsForCard,
   listGroupNames,
@@ -89,6 +90,8 @@ const DEFAULT_STUDY_SETTINGS: StudySettings = {
   // pool, so Start review has to hand you that pool and not a silent slice of it.
   easyReviewScope: "all",
   easyReviewSize: 20,
+  // Off, because Got it is how you say you are finished with a question.
+  reviewIncludesGotIt: false,
   masteryCardIds: [],
   cardGroups: {},
   speakQuestions: false,
@@ -99,22 +102,29 @@ const DEFAULT_STUDY_SETTINGS: StudySettings = {
 const VOICE_KEY = "crambot-speech-voice";
 
 /**
- * Two labels, because only two things ever happened.
+ * Three labels, named for what happens to the question next.
  *
- * The old four were Anki's, and those words name scheduling intervals: "Again" is show
- * me in a minute, "Good" is the normal gap. Scheduling was taken out of this app, so
- * whichever of the three non-Easy buttons you pressed, the question simply went to the
- * back of the queue. Nothing in the code branched on Good at all, and Hard existed only
- * to populate one dropdown option.
+ * Two was one too few. Leaving the Mastery pool and joining the Review queue were the
+ * same button, so there was no way to say "I am finished with this" without either
+ * keeping it in the drill or keeping it in the rotation forever.
  *
- * The stored values are untouched. Not yet writes 1 and Got it writes 4, exactly as
- * Again and Easy did, so nothing already rated has to be migrated, and a device still
- * running an older build can write a 2 or a 3 without confusing anything: those read
- * back as Not yet, which is what they always behaved as.
+ *   Not yet     stays in the Mastery pool and comes round again.
+ *   Keep fresh  leaves the pool and joins the Review queue.
+ *   Got it      leaves both. Reviewed only if you ask for it.
+ *
+ * The middle rung writes 4, which is what the old Got it wrote, so every question
+ * already marked is in the Review queue tomorrow exactly as it is today and nothing
+ * has to be migrated. Got it is the genuinely new state and writes 5, which is why the
+ * database check had to be widened; see supabase/migrations.
+ *
+ * A device on an older build writes 1 or 4 and stays coherent. It cannot write a 5,
+ * and reads one as an unknown rating, which sorts with Not yet: it will offer the
+ * question again, which is wrong but harmless, and one press here puts it right.
  */
 const RATING_OPTIONS = [
   { value: MasteryRating.Again, label: "Not yet", tone: "again" },
-  { value: MasteryRating.Easy, label: "Got it", tone: "easy" },
+  { value: MasteryRating.KeepFresh, label: "Keep fresh", tone: "fresh" },
+  { value: MasteryRating.GotIt, label: "Got it", tone: "easy" },
 ] as const;
 
 /**
@@ -122,11 +132,12 @@ const RATING_OPTIONS = [
  *
  * The words match the buttons in Study and the badge on each row, because a filter
  * that renamed them would leave you guessing which of two vocabularies you were
- * choosing from. Unrated is last: it is the absence of a label, not a third one.
+ * choosing from. Unrated is last: it is the absence of a label, not a fourth one.
  */
 const LABEL_FILTERS: readonly { value: LabelFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "not-yet", label: "Not yet" },
+  { value: "keep-fresh", label: "Keep fresh" },
   { value: "got-it", label: "Got it" },
   { value: "unrated", label: "Unrated" },
 ];
@@ -194,6 +205,7 @@ function readStudySettings(session: StudySession | null = null): StudySettings {
       // value as "all" is what turns that stale 20 back into the whole ready pool.
       easyReviewScope: stored.easyReviewScope === "batch" ? "batch" : "all",
       easyReviewSize: normalizeQuestionCount(stored.easyReviewSize, migratedCount),
+      reviewIncludesGotIt: stored.reviewIncludesGotIt === true,
       masteryCardIds: [...new Set([...masteryCardIds, ...legacySessionIds])],
       cardGroups: normalizeCardGroups(stored.cardGroups),
       speakQuestions: stored.speakQuestions === true,
@@ -244,16 +256,26 @@ function formatDuration(seconds: number): string {
   return `${minutes}:${String(remainder).padStart(2, "0")}`;
 }
 
-function ratingLabel(rating: MasteryRatingValue | null): string {
-  if (rating === null) return "Unrated";
-  // Retired Hard and Good read as Not yet: they always behaved as in-pool.
-  return rating === MasteryRating.Easy ? "Got it" : "Not yet";
+/**
+ * The badge on a library row, and the word used when a rating is named in prose.
+ *
+ * Driven by the same table as the buttons, so the badge cannot drift from what you
+ * pressed. Retired Hard and Good fall through to Not yet, which is how they always
+ * behaved: neither ever left the pool.
+ */
+function ratingOption(rating: MasteryRatingValue | null) {
+  return RATING_OPTIONS.find((option) => option.value === rating) ?? null;
 }
 
-/** A class-name-safe stand-in, since the labels themselves now contain a space. */
+function ratingLabel(rating: MasteryRatingValue | null): string {
+  if (rating === null) return "Unrated";
+  return ratingOption(rating)?.label ?? "Not yet";
+}
+
+/** A class-name-safe stand-in, since the labels themselves contain a space. */
 function ratingTone(rating: MasteryRatingValue | null): string {
   if (rating === null) return "unrated";
-  return rating === MasteryRating.Easy ? "easy" : "again";
+  return ratingOption(rating)?.tone ?? "again";
 }
 
 function downloadJson(data: unknown, filename: string) {
@@ -324,24 +346,40 @@ function MoreMenu({ label, title, className, children }: { label: ReactNode; tit
 }
 
 /**
- * Files the current selection under a group, existing or new.
+ * Files questions under a group, existing or new.
  *
  * One control for both, because "add these to Networking" and "add these to a group I
  * am inventing now" are the same intention and splitting them into two buttons makes
  * you decide which one you are doing before you have decided anything.
  *
- * The panel stays open after a pick, deliberately: filing a selection under two
- * groups at once is ordinary, and the notice underneath already confirms each one.
+ * Used from the library, where it acts on the selection, and from the question you are
+ * looking at mid-session, where it acts on that one. The difference is entirely in
+ * what the caller does with the name, so the same panel serves both.
+ *
+ * The panel stays open after a pick, deliberately: filing something under two groups
+ * at once is ordinary, and the notice above already confirms each one.
  */
-function GroupPicker({ names, selectionSize, onPick }: { names: readonly string[]; selectionSize: number; onPick: (name: string) => void }) {
+function GroupPicker({ names, label, title, targetCount, emptyHint, onPick }: {
+  names: readonly string[];
+  label: string;
+  title: string;
+  targetCount: number;
+  emptyHint: string;
+  onPick: (name: string) => void;
+}) {
   const [draft, setDraft] = useState("");
   const pending = normalizeGroupName(draft);
   const taken = names.some((name) => name.toLowerCase() === pending.toLowerCase());
   return (
-    <MoreMenu className="group-menu" title="File the selected questions under a group" label="Add to group ▾">
-      {selectionSize === 0
-        ? <p className="group-menu-hint">Select some questions first, then file them under a group.</p>
+    <MoreMenu className="group-menu" title={title} label={label}>
+      {targetCount === 0
+        ? <p className="group-menu-hint">{emptyHint}</p>
         : <>
+          {/* Shown until the first group exists, then never again. Someone who has
+              made one knows what they are for better than a sentence could say. */}
+          {names.length === 0 && (
+            <p className="group-menu-hint">Groups are your own way to file related questions. Name one after what they have in common.</p>
+          )}
           <form onSubmit={(event) => { event.preventDefault(); if (!pending) return; onPick(pending); setDraft(""); }}>
             <input
               value={draft}
@@ -495,15 +533,25 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   const allNotEasy = useMemo(() => filterMasteryPool(examCards, "all-not-easy"), [examCards]);
   const masteryPoolIds = useMemo(() => new Set(studySettings.masteryCardIds), [studySettings.masteryCardIds]);
   const currentMasteryPool = useMemo(
-    () => examCards.filter((card) => masteryPoolIds.has(card.id) && card.masteryRating !== MasteryRating.Easy),
+    () => examCards.filter((card) => masteryPoolIds.has(card.id) && !leavesMasteryPool(card.masteryRating)),
     [examCards, masteryPoolIds],
   );
   const masteryAdditionsAvailable = useMemo(
     () => filterMasteryPool(examCards, studySettings.masteryPool).filter((card) => !masteryPoolIds.has(card.id)),
     [examCards, masteryPoolIds, studySettings.masteryPool],
   );
-  const easyPool = useMemo(() => filterEasyReviewPool(examCards), [examCards]);
-  const easyReviewPlan = useMemo(() => planEasyReview(easyPool.length, studySettings), [easyPool.length, studySettings]);
+  /** What pressing Add would really add: the ask, or what is left, whichever is fewer. */
+  const masteryAdditionCount = Math.min(studySettings.masterySetSize, masteryAdditionsAvailable.length);
+  // What a review would ask right now, which is the Keep fresh pool plus Got it when
+  // that option is on. Counted separately so the tally underneath can say what turning
+  // the option on would add rather than only what is currently in scope.
+  const reviewPool = useMemo(
+    () => filterReviewPool(examCards, studySettings.reviewIncludesGotIt),
+    [examCards, studySettings.reviewIncludesGotIt],
+  );
+  // Counted once for both the standing totals above and the library filter below.
+  const labelCounts = useMemo(() => countCardsByLabel(examCards), [examCards]);
+  const easyReviewPlan = useMemo(() => planEasyReview(reviewPool.length, studySettings), [reviewPool.length, studySettings]);
   useEffect(() => {
     // Guard on examCodes being populated. On a device whose library has not synced
     // yet, examCodes is briefly empty, and without this the restored or adopted
@@ -603,9 +651,6 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   const sessionFinished = Boolean(studySession && studySession.queue.length === 0 && !viewingHistory);
   const sessionSummary = studySession ? summarizeStudySession(studySession) : null;
 
-  // Counted before the search narrows anything, so the filter reports what the exam
-  // holds rather than what the words you have typed so far happen to leave.
-  const labelCounts = useMemo(() => countCardsByLabel(examCards), [examCards]);
 
   const cardGroups = studySettings.cardGroups;
   const groupNames = useMemo(() => listGroupNames(cardGroups), [cardGroups]);
@@ -665,6 +710,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
             masteryPool: restored.masteryPool === "again-hard" ? "again-hard" : "all-not-easy",
             easyReviewScope: restored.easyReviewScope === "batch" ? "batch" : "all",
             easyReviewSize: normalizeQuestionCount(restored.easyReviewSize, count),
+            reviewIncludesGotIt: restored.reviewIncludesGotIt ?? existing.reviewIncludesGotIt,
             masteryCardIds: normalizeCardIds(restored.masteryCardIds),
             // A backup predating groups carries none, so this device keeps its own
             // rather than having them wiped by restoring an older library.
@@ -846,6 +892,27 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
       : `${added} question${added === 1 ? "" : "s"} added to ${existingName ?? name}.`);
   }
 
+  /**
+   * The same two operations for one question, reachable while you are looking at it.
+   *
+   * Mid-session is when you actually notice that two questions cover the same ground,
+   * and having to remember it until you next open the library is how that gets lost.
+   */
+  function addQuestionToGroup(cardId: string, rawName: string) {
+    const name = normalizeGroupName(rawName);
+    if (!name) return;
+    const existingName = findGroupName(cardGroups, name);
+    const already = existingName ? cardGroups[existingName].includes(cardId) : false;
+    setStudySettings((existing) => ({ ...existing, cardGroups: addCardsToGroup(existing.cardGroups, name, [cardId]) }));
+    setNotice(already ? `Already in ${existingName}.` : `Added to ${existingName ?? name}.`);
+  }
+
+  function removeQuestionFromGroup(cardId: string, name: string) {
+    const last = (cardGroups[name]?.length ?? 0) <= 1;
+    setStudySettings((existing) => ({ ...existing, cardGroups: removeCardsFromGroup(existing.cardGroups, name, [cardId]) }));
+    setNotice(last ? `Removed from ${name}, which is empty now and gone.` : `Removed from ${name}.`);
+  }
+
   function removeSelectedFromGroup(name: string) {
     if (selectedCards.length === 0) return;
     const cardIds = selectedCards.map((card) => card.id);
@@ -887,8 +954,8 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
    * Puts hand-picked library questions into the Mastery pool.
    *
    * Picking from the library is how you drill a specific topic rather than whatever a
-   * random batch offers. Anything already marked Got it has its label cleared on the
-   * way in, because the pool sheds Got it questions on every sync and it would
+   * random batch offers. Anything already out of the pool has its label cleared on the
+   * way in, because the pool sheds those questions on every sync and it would
    * otherwise look added and then disappear. That is a change to your ratings, so the
    * notice says how many, rather than it happening quietly.
    */
@@ -908,7 +975,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
       setSelectedCardIds(new Set());
       const parts = [`${plan.add.length} question${plan.add.length === 1 ? "" : "s"} added to the Mastery pool.`];
       if (plan.alreadyPooled.length) parts.push(`${plan.alreadyPooled.length} ${plan.alreadyPooled.length === 1 ? "was" : "were"} already in it.`);
-      if (plan.unretire.length) parts.push(`${plan.unretire.length} marked Got it ${plan.unretire.length === 1 ? "is" : "are"} now unrated so ${plan.unretire.length === 1 ? "it" : "they"} can be drilled again.`);
+      if (plan.unretire.length) parts.push(`${plan.unretire.length} already out of the pool ${plan.unretire.length === 1 ? "is" : "are"} now unrated so ${plan.unretire.length === 1 ? "it" : "they"} can be drilled again.`);
       setNotice(parts.join(" "));
       cloud.request();
     } catch (error) {
@@ -1184,19 +1251,23 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
           <section className="review-layout mastery-layout">
             {/* Setup, and the standing totals, are about choosing what to study. Once a
                 session is running they sit between you and the question for no reason,
-                so they give way to the row below and the question moves up the page. */}
+                so they give way to the row below and the question moves up the page.
+
+                One column per label, so the three numbers add up to the library and
+                you can see where everything sits at a glance. */}
             {!studySession && (
             <section className="mastery-overview" aria-label="Mastery progress">
               <div><strong>{allNotEasy.length}</strong><span>to master</span></div>
-              <div><strong>{easyPool.length}</strong><span>got it</span></div>
-              <div><strong>{examCards.length ? Math.round((easyPool.length / examCards.length) * 100) : 0}%</strong><span>mastered</span></div>
+              <div><strong>{labelCounts["keep-fresh"]}</strong><span>keeping fresh</span></div>
+              <div><strong>{labelCounts["got-it"]}</strong><span>got it</span></div>
+              <div><strong>{examCards.length ? Math.round(((labelCounts["keep-fresh"] + labelCounts["got-it"]) / examCards.length) * 100) : 0}%</strong><span>out of the pool</span></div>
             </section>
             )}
 
             <div className="study-controls">
               {studySession ? (
               <div className="session-settings running-session">
-                {studyMode === "mastery" && <button className="secondary compact" disabled={masteryAdditionsAvailable.length === 0} onClick={() => addToMasteryPool()}>Add questions</button>}
+                {studyMode === "mastery" && <button className="secondary compact" disabled={masteryAdditionsAvailable.length === 0} onClick={() => addToMasteryPool()}>Add {masteryAdditionCount} to pool</button>}
                 <button className="secondary compact" onClick={() => setStudySession(null)}>End session</button>
               </div>
               ) : (
@@ -1206,15 +1277,27 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 <button className={studyMode === "easy-review" ? "active" : ""} aria-pressed={studyMode === "easy-review"} onClick={() => { setStudyMode("easy-review"); setStudySession(null); setRevealed(false); }}>Review</button>
               </div>
               <p className="mode-description">{studyMode === "mastery"
-                ? "Build a persistent pool and work each question until you have got it."
-                : "Review mastered questions once; relabel anything that needs more work."}</p>
+                ? "Build a persistent pool and work each question until it leaves it."
+                : "Run once through what you are keeping fresh; relabel anything shaky."}</p>
               <div className="session-settings simplified-settings">
                 {studyMode === "mastery" ? <>
-                  <CountField
-                    label="Questions to add"
-                    value={studySettings.masterySetSize}
-                    onCommit={(masterySetSize) => setStudySettings((existing) => ({ ...existing, masterySetSize }))}
-                  />
+                  {/* The field and the button that acts on it are one control, so they
+                      sit together and the button counts out loud what it is about to
+                      do. Apart, with the totals between them, the number looked like a
+                      setting belonging to whichever button you happened to press. */}
+                  <div className="setting-pair">
+                    <CountField
+                      label="Questions to add"
+                      value={studySettings.masterySetSize}
+                      onCommit={(masterySetSize) => setStudySettings((existing) => ({ ...existing, masterySetSize }))}
+                    />
+                    <button
+                      className="secondary compact"
+                      disabled={masteryAdditionsAvailable.length === 0}
+                      // Says the real number: asking for 5 when 3 are left adds 3.
+                      onClick={() => addToMasteryPool()}
+                    >Add {masteryAdditionCount} to pool</button>
+                  </div>
                   <span className="pool-count">{currentMasteryPool.length} in pool · {masteryAdditionsAvailable.length} available to add</span>
                 </> : <>
                   <div className="scope-tabs" role="group" aria-label="How much to review">
@@ -1222,7 +1305,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                       className={studySettings.easyReviewScope === "all" ? "active" : ""}
                       aria-pressed={studySettings.easyReviewScope === "all"}
                       onClick={() => setStudySettings((existing) => ({ ...existing, easyReviewScope: "all" }))}
-                    >All {easyPool.length}</button>
+                    >All {reviewPool.length}</button>
                     <button
                       className={studySettings.easyReviewScope === "batch" ? "active" : ""}
                       aria-pressed={studySettings.easyReviewScope === "batch"}
@@ -1236,15 +1319,22 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                       onCommit={(easyReviewSize) => setStudySettings((existing) => ({ ...existing, easyReviewSize }))}
                     />
                   )}
+                  <label className="study-toggle inline-toggle" title="Got it means you are finished with a question. Turn this on for a last pass before an exam.">
+                    <input
+                      type="checkbox"
+                      checked={studySettings.reviewIncludesGotIt}
+                      onChange={(event) => setStudySettings((existing) => ({ ...existing, reviewIncludesGotIt: event.target.checked }))}
+                    />
+                    Include Got it <b>{labelCounts["got-it"]}</b>
+                  </label>
                   <span className="pool-count">{studySettings.easyReviewScope === "batch"
-                    ? `${easyReviewPlan.sessionSize} this session · ${easyReviewPlan.parts} part${easyReviewPlan.parts === 1 ? "" : "s"} to cover all ${easyPool.length}`
-                    : `${easyPool.length} to review`}</span>
+                    ? `${easyReviewPlan.sessionSize} this session · ${easyReviewPlan.parts} part${easyReviewPlan.parts === 1 ? "" : "s"} to cover all ${reviewPool.length}`
+                    : `${reviewPool.length} to review`}</span>
                 </>}
                 {studyMode === "mastery" ? <>
                   <button className="primary compact" disabled={currentMasteryPool.length === 0} onClick={() => startStudySession("mastery")}>Study current pool</button>
-                  <button className="secondary compact" disabled={masteryAdditionsAvailable.length === 0} onClick={() => addToMasteryPool()}>Add questions to pool</button>
                   <button className="secondary compact" disabled={currentMasteryPool.length === 0} onClick={() => clearMasteryPool()}>Clear pool</button>
-                </> : <button className="primary compact" disabled={easyPool.length === 0} onClick={() => startStudySession("easy-review")}>Start review</button>}
+                </> : <button className="primary compact" disabled={reviewPool.length === 0} onClick={() => startStudySession("easy-review")}>Start review</button>}
               </div>
               </>
               )}
@@ -1353,7 +1443,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 <div><span className="metric">{studySession.completed}</span><small>{studyMode === "mastery" ? "mastered" : "reviewed"}</small></div>
                 <div><span className="metric">{studySession.attempts}</span><small>attempts</small></div>
               </> : <>
-                <div><span className="metric">{studyMode === "mastery" ? currentMasteryPool.length : easyPool.length}</span><small>{studyMode === "mastery" ? "in pool" : "available"}</small></div>
+                <div><span className="metric">{studyMode === "mastery" ? currentMasteryPool.length : reviewPool.length}</span><small>{studyMode === "mastery" ? "in pool" : "available"}</small></div>
                 <div><span className="metric">{studyMode === "mastery" ? masteryAdditionsAvailable.length : easyReviewPlan.sessionSize}</span><small>{studyMode === "mastery" ? "available to add" : "this session"}</small></div>
               </>}
             </div>
@@ -1370,7 +1460,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 </div>
                 <div className="result-actions">
                   <button className="primary" disabled={currentMasteryPool.length === 0 && masteryAdditionsAvailable.length === 0} onClick={() => currentMasteryPool.length ? startStudySession("mastery") : addToMasteryPool(true)}>{currentMasteryPool.length ? "Study Mastery pool" : "Build Mastery pool"}</button>
-                  <button className="secondary" disabled={easyPool.length === 0} onClick={() => startStudySession("easy-review")}>Review what you know</button>
+                  <button className="secondary" disabled={reviewPool.length === 0} onClick={() => startStudySession("easy-review")}>Review what you know</button>
                   <button className="secondary" onClick={() => setStudySession(null)}>Done</button>
                 </div>
               </section>
@@ -1380,6 +1470,24 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                   {/* Counts mastery, not position. Unmastered cards are pushed back onto
                       the queue, so there is no stable position to count through. */}
                   <span>{currentCard.tags.join(" · ") || "Uncategorized"}</span>
+                  {/* Grouping belongs here, on the question, because this is where you
+                      notice that two of them cover the same ground. */}
+                  {(groupsByCardId.get(currentCard.id) ?? []).map((name) => (
+                    <button
+                      key={name}
+                      className="group-chip removable"
+                      title={`Take this question out of ${name}`}
+                      onClick={() => removeQuestionFromGroup(currentCard.id, name)}
+                    >{name} <span aria-hidden="true">×</span></button>
+                  ))}
+                  <GroupPicker
+                    names={groupNames}
+                    label="+ Group"
+                    title="File this question under a group"
+                    targetCount={1}
+                    emptyHint=""
+                    onPick={(name) => addQuestionToGroup(currentCard.id, name)}
+                  />
                   <span className={`mastery-label label-${ratingTone(currentCard.masteryRating)}`}>{ratingLabel(currentCard.masteryRating)}</span>
                 </div>
                 {studySession && (studySession.results.length > 0 || viewingHistory) && (
@@ -1433,7 +1541,9 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                     {currentCard.answerImages.length > 0 && <div className="answer-images">{currentCard.answerImages.map((image) => <img key={image.src} src={image.dataUrl || image.src} alt={image.alt || "Answer diagram"} />)}</div>}
                     {currentCard.explanation && <CapturedText text={currentCard.explanation} as="p" />}
                     {currentQuestion?.discussion && <DiscussionPanel discussion={currentQuestion.discussion} expectedCount={currentQuestion.discussionCount} />}
-                    <p className="rating-help">{studySession?.mode === "mastery" ? "Got it retires this question from the pool. Not yet keeps it in and brings it round again." : "Not yet puts this question back into your Mastery pool. Got it keeps it in the review rotation."}</p>
+                    <p className="rating-help">{studySession?.mode === "mastery"
+                      ? "Keep fresh moves this question to the Review queue. Got it retires it from both. Not yet brings it round again."
+                      : "Not yet puts this question back into your Mastery pool. Keep fresh holds it in the rotation. Got it retires it."}</p>
                     <div className="ratings" aria-label="Rate this question">{RATING_OPTIONS.map((rating, index) => <button key={rating.value} className={rating.tone} onClick={() => void handleRating(rating.value)}>{rating.label} <kbd>{index + 1}</kbd></button>)}</div>
                   </div>
                 )}
@@ -1467,11 +1577,11 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                       <h2>Build a pool, then work it down</h2>
                       <ol className="empty-steps">
                         <li>Your <strong>pool</strong> is the set you are drilling right now. It starts empty.</li>
-                        <li>Answer a question, reveal it, then say <strong>Got it</strong> or <strong>Not yet</strong>.</li>
-                        <li><strong>Got it</strong> retires a question. <strong>Not yet</strong> brings it round again. You are done when the pool is empty.</li>
+                        <li>Answer a question, reveal it, then say how it went.</li>
+                        <li><strong>Not yet</strong> brings it round again. <strong>Keep fresh</strong> sends it to the Review queue, <strong>Got it</strong> retires it from both. You are done when the pool is empty.</li>
                       </ol>
                       <div className="empty-actions">
-                        <button className="primary" onClick={() => addToMasteryPool(true)}>Add {Math.min(studySettings.masterySetSize, masteryAdditionsAvailable.length)} and start</button>
+                        <button className="primary" onClick={() => addToMasteryPool(true)}>Add {masteryAdditionCount} and start</button>
                         <button className="secondary" onClick={() => setView("library")}>Pick questions myself</button>
                       </div>
                     </>
@@ -1479,15 +1589,15 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                     <>
                       <div className="empty-icon">✓</div>
                       <h2>Nothing left to master</h2>
-                      <p>Every question here is marked Got it. Review them to keep them fresh, or reset your labels from the Library to make another pass.</p>
-                      {easyPool.length > 0 && <button className="primary" onClick={() => startStudySession("easy-review")}>Review what you know</button>}
+                      <p>Every question here has left the pool. Review the ones you are keeping fresh, or reset your labels from the Library to make another pass.</p>
+                      {reviewPool.length > 0 && <button className="primary" onClick={() => startStudySession("easy-review")}>Review what you know</button>}
                     </>
                   )
-                ) : easyPool.length ? (
+                ) : reviewPool.length ? (
                   <>
                     <div className="empty-icon">◉</div>
-                    <h2>{easyPool.length} question{easyPool.length === 1 ? "" : "s"} ready to review</h2>
-                    <p>Review asks what you have not seen in longest, first. Answer <strong>Not yet</strong> on anything shaky and it goes back into your Mastery pool.</p>
+                    <h2>{reviewPool.length} question{reviewPool.length === 1 ? "" : "s"} ready to review</h2>
+                    <p>Review asks what you have not seen in longest, first. Answer <strong>Not yet</strong> on anything shaky and it goes back into your Mastery pool; <strong>Got it</strong> retires it from the rotation.</p>
                     {studySettings.easyReviewScope === "batch" && (
                       <p className="empty-note">Set to parts of {studySettings.easyReviewSize}, so this session takes {easyReviewPlan.sessionSize} and the next one carries on from there.</p>
                     )}
@@ -1497,7 +1607,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                   <>
                     <div className="empty-icon">✓</div>
                     <h2>Nothing to review yet</h2>
-                    <p>Questions arrive here once you mark them <strong>Got it</strong> in Mastery.</p>
+                    <p>Questions arrive here once you mark them <strong>Keep fresh</strong> in Mastery. <strong>Got it</strong> retires them instead, and the option above sweeps those back in.</p>
                   </>
                 )}
               </div>
@@ -1509,6 +1619,13 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
           <section className="library">
             <div className="library-tools">
               <input type="search" aria-label="Search question library" placeholder="Search questions, answers, notes, groups, or tags" value={query} onChange={(event) => setQuery(event.target.value)} />
+              {/* Hidden once a group exists: the dropdown beside it then explains
+                  itself, and a permanent instruction is just noise to anyone who has
+                  already done the thing it describes. */}
+              {groupNames.length === 0 && cards.length > 0 && (
+                <p className="tool-hint">Tick some questions below and use <strong>Add to group</strong> to file related ones together. You can also group a question while you are answering it.</p>
+              )}
+              {groupNames.length > 0 && (
               <label className="group-filter">
                 <span>Group</span>
                 <select
@@ -1524,6 +1641,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                   <option value={UNGROUPED}>Ungrouped ({ungroupedCount})</option>
                 </select>
               </label>
+              )}
               <div className="label-filter" role="group" aria-label="Filter by label">
                 {LABEL_FILTERS.map(({ value, label }) => (
                   <button
@@ -1546,7 +1664,14 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
               <div className="library-bulk-actions">
                 <button className="secondary compact" disabled={busy || filteredCards.length === 0} onClick={toggleFilteredSelection}>{allFilteredSelected ? "Clear shown" : `Select shown (${filteredCards.length})`}</button>
                 <button className="primary compact" disabled={busy || selectedCards.length === 0} onClick={() => void handleAddSelectedToPool()}>Add to Mastery pool</button>
-                <GroupPicker names={groupNames} selectionSize={selectedCards.length} onPick={addSelectedToGroup} />
+                <GroupPicker
+                  names={groupNames}
+                  label="Add to group"
+                  title="File the selected questions under a group"
+                  targetCount={selectedCards.length}
+                  emptyHint="Select some questions first, then file them under a group."
+                  onPick={addSelectedToGroup}
+                />
                 <button className="danger-button" disabled={busy || selectedCards.filter(canDeleteCard).length === 0} onClick={() => void handleRemove(selectedCards, "selected")}>Delete selected</button>
                 <MoreMenu className="danger-menu" title="Actions that cannot be undone" label="⋯">
                   {activeGroup && <>

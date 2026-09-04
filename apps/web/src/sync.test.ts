@@ -39,7 +39,7 @@ function card(id: string, questionId: string): StudyCard {
     confidence: "source-answer",
     sourceUrl: `https://example.test/${questionId}`,
     createdAt: "2026-08-28T12:00:00.000Z",
-    masteryRating: MasteryRating.Easy,
+    masteryRating: MasteryRating.KeepFresh,
     ratingUpdatedAt: "2026-08-28T12:00:00.000Z",
     updatedAt: "2026-08-28T12:00:00.000Z",
     notes: "my private mnemonic",
@@ -59,7 +59,7 @@ describe("shared and private split", () => {
     expect(content.front).toBe("Test question");
     expect(progress).toEqual({
       card_id: "card-1",
-      mastery_rating: MasteryRating.Easy,
+      mastery_rating: MasteryRating.KeepFresh,
       rating_updated_at: "2026-08-28T12:00:00.000Z",
       notes: "my private mnemonic",
       feedback_flags: ["unclear"],

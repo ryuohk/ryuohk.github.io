@@ -64,7 +64,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .notice.sync-failure strong { color: #a82419; }
 .notice.sync-failure span { overflow-wrap: anywhere; }
 
-.mastery-overview { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: center; padding: 14px 16px; border: 1px solid #e0e5ee; border-radius: 14px; background: white; }
+.mastery-overview { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; align-items: center; padding: 14px 16px; border: 1px solid #e0e5ee; border-radius: 14px; background: white; }
 .mastery-overview div { display: grid; gap: 2px; }
 .mastery-overview strong { color: #172033; font-size: 22px; }
 .mastery-overview span { color: #778499; font-size: 11px; }
@@ -83,6 +83,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .scope-tabs { display: inline-flex; gap: 4px; padding: 4px; border-radius: 9px; background: #f0f3f8; }
 .scope-tabs button { border: 0; border-radius: 6px; padding: 7px 11px; color: #627087; background: transparent; font-size: 12px; font-weight: 750; white-space: nowrap; }
 .scope-tabs button.active { color: #185ac5; background: white; box-shadow: 0 2px 8px #17243a14; }
+/* A field and the button that acts on it, kept adjacent so the number is plainly the
+   button's argument rather than a setting floating in the row. */
+.setting-pair { display: flex; align-items: end; gap: 8px; }
 .pool-count { margin-left: auto; align-self: center; color: #778499; font-size: 12px; white-space: nowrap; }
 .running-session { gap: 9px; }
 /* Destructive actions stack in their own panel rather than sitting in the toolbar. */
@@ -96,12 +99,23 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .progress-card small { color: #778499; }
 .study-card, .empty-state { grid-column: 1; grid-row: 3; border: 1px solid #e0e5ee; border-radius: 18px; background: white; box-shadow: 0 16px 45px #18243a0b; }
 .study-card { padding: clamp(24px, 5vw, 48px); }
-.card-meta { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 25px; color: #66758b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+/* The grouping controls sit in this row, so it wraps rather than squeezing, and the
+   mastery label is pushed right by margin instead of space-between, which would
+   otherwise scatter the chips across the gap. */
+.card-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 25px; color: #66758b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.card-meta > .mastery-label { margin-left: auto; }
+/* The picker sits near the left of the row here, unlike in the toolbars, so its panel
+   has to open rightward or it hangs off the edge of the card. */
+.card-meta .more-panel { left: 0; right: auto; }
+.card-meta .more-menu > summary { padding: 4px 9px; font-size: 11px; text-transform: none; letter-spacing: 0; }
 .danger-link { border: 0; padding: 4px 0; color: #b42318; background: transparent; font-size: 11px; font-weight: 750; text-transform: none; letter-spacing: 0; }
 .danger-link:hover { color: #7a1710; text-decoration: underline; }
 .mastery-label { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 9px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .label-unrated { color: #536178; background: #eef1f5; }
 .label-again { color: #a82419; background: #ffe9e7; }
+/* Amber between the red of Not yet and the blue of Got it: a rung on the way, not a
+   verdict either way. */
+.label-fresh { color: #8a5a08; background: #fff2dc; }
 .label-easy { color: #185ac5; background: #e5efff; }
 /* pre-wrap so captured line breaks survive; anywhere so long URLs and code in a
    prompt cannot push the card wider than the screen. */
@@ -126,6 +140,11 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .study-toggles { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px solid #eef1f6; color: #4e6079; font-size: 13px; }
 .study-toggle { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; cursor: pointer; }
 .study-toggle input { width: 18px; height: 18px; accent-color: #2563eb; }
+/* The one toggle that lives among the session settings rather than in the row of
+   toggles below them, because it changes what Start review would ask for. Specific
+   enough to beat the grid layout those settings put on every label. */
+.session-settings label.inline-toggle { display: inline-flex; align-items: center; gap: 8px; min-width: 0; align-self: center; font-size: 12px; text-transform: none; letter-spacing: 0; }
+.inline-toggle b { color: #8a94a6; font-weight: 800; }
 .speech-rate, .speech-voice { display: inline-flex; align-items: center; gap: 8px; }
 .speech-rate input[type="range"] { width: 120px; accent-color: #2563eb; }
 .speech-rate-value { min-width: 34px; font-variant-numeric: tabular-nums; font-weight: 700; }
@@ -194,10 +213,11 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 
 .rating-help { margin: 16px 0 0; padding-top: 13px; border-top: 1px solid #d8eee6; font-size: 12px; }
 .shortcut { margin-left: 6px; border: 1px solid #ffffff66; border-radius: 5px; padding: 2px 6px; font-size: 10px; opacity: .9; }
-.ratings { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; margin-top: 20px; }
+.ratings { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin-top: 20px; }
 .ratings button { border: 0; border-radius: 9px; padding: 11px 5px; font-weight: 750; }
 .ratings button { display: flex; align-items: center; justify-content: center; gap: 7px; }
 .ratings .again { color: #a82419; background: #ffe9e7; }
+.ratings .fresh { color: #8a5a08; background: #fff2dc; }
 .ratings .easy { color: #185ac5; background: #e5efff; }
 .empty-state { min-height: 430px; display: grid; place-items: center; align-content: center; padding: 45px; text-align: center; }
 .empty-icon { width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; color: #087a55; background: #dcf8ee; font-size: 27px; }
@@ -225,7 +245,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .danger-button:hover:not(:disabled) { border-color: #d99791; background: #fff5f4; }
 .danger-button.danger-solid { border-color: #b42318; color: white; background: #b42318; }
 .danger-button.danger-solid:hover:not(:disabled) { border-color: #8f1c13; background: #8f1c13; }
-.library-tools { display: flex; align-items: center; gap: 15px; }
+/* Wraps, because the hint below the filters takes a full line of its own. */
+.library-tools { display: flex; align-items: center; gap: 15px; flex-wrap: wrap; }
 .library-tools input { flex: 1; border: 1px solid #dce2ec; border-radius: 11px; padding: 13px 15px; background: white; outline: none; }
 .library-tools input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px #2563eb1a; }
 /* Wraps under the search box on a narrow window rather than squeezing it out. */
@@ -243,11 +264,19 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .group-menu .more-panel input { flex: 1; min-width: 0; min-height: 33px; border: 1px solid #d8deea; border-radius: 8px; padding: 6px 9px; color: #35445c; background: white; }
 .group-menu .more-panel button { width: 100%; }
 .group-menu .more-panel form button { width: auto; flex: 0 0 auto; }
-.group-menu-hint { margin: 2px 0 0; color: #8a94a6; font-size: 11px; }
+.group-menu-hint { margin: 2px 0 0; color: #8a94a6; font-size: 11px; line-height: 1.5; }
+/* Explanatory lines that appear only while a feature is unused and vanish once it is,
+   so nothing has to be dismissed and nothing has to be remembered. */
+.tool-hint { flex: 1 1 100%; margin: 0; color: #778499; font-size: 12px; line-height: 1.5; }
+.tool-hint strong { color: #4e6079; }
 /* Quieter than the exam tag beside it: the exam is what a question is, a group is
    what you decided about it. */
 .group-chip { border: 1px solid #dbe6f7; border-radius: 999px; padding: 4px 9px; color: #4b6da8; background: #f2f6fd; font-size: 10px; font-weight: 800; text-transform: none; letter-spacing: 0; }
 .group-chip:hover { border-color: #b9cdec; color: #23477f; background: #e6eefb; }
+/* On a question, a chip is how you take it back out, so it reads as removable. */
+.group-chip.removable span { margin-left: 3px; opacity: .55; font-size: 12px; }
+.group-chip.removable:hover { border-color: #e9bdb8; color: #a82419; background: #fff1ef; }
+.group-chip.removable:hover span { opacity: 1; }
 .card-list { display: grid; gap: 11px; }
 .card-list article { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: start; border: 1px solid #e0e5ed; border-radius: 13px; padding: 18px 20px; background: white; transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
 .card-list article.selected { border-color: #7ba6ed; background: #f8fbff; box-shadow: 0 0 0 2px #2563eb14; }
@@ -295,7 +324,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .topbar .secondary { min-height: 44px; }
   .topbar-actions { width: 100%; justify-content: flex-start; }
   .review-layout { display: flex; flex-direction: column; }
-  .mastery-overview { width: 100%; grid-template-columns: repeat(3, 1fr); order: -3; }
+  .mastery-overview { width: 100%; grid-template-columns: repeat(2, 1fr); order: -3; }
   .study-controls { width: 100%; order: -2; }
   .mode-tabs button { min-height: 44px; padding-inline: 6px; font-size: 12px; }
   .session-settings label:not(.checkbox-setting) { flex: 1 1 140px; }
@@ -318,9 +347,13 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .discussion-panel > summary { min-height: 44px; }
   .discussion-comments { max-height: min(65dvh, 560px); padding-inline: 12px; }
   .discussion-replies { margin-left: 6px; padding-left: 10px; }
-  .ratings { grid-template-columns: repeat(2, 1fr); }
+  /* One per row on a phone: three across leaves each too narrow to read, and these
+     are the buttons you press most. */
+  .ratings { grid-template-columns: 1fr; }
   .shortcut, .keyboard-hint { display: none; }
-  .card-meta { align-items: start; flex-direction: column; }
+  /* Stays a wrapping row rather than stacking: it now holds group chips, and a
+     column would give a question in three groups three lines of its own. */
+  .card-meta { align-items: center; }
   .card-meta-actions { width: 100%; justify-content: space-between; }
   .library-manager { align-items: stretch; flex-direction: column; }
   .library-bulk-actions { position: relative; justify-content: stretch; }
@@ -329,6 +362,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .library-bulk-actions > .more-menu > summary { min-height: 44px; padding-inline: 14px; }
   .danger-menu .more-panel button { flex: none; }
   .library-tools { align-items: stretch; flex-direction: column; gap: 10px; }
+  .setting-pair { width: 100%; }
+  .setting-pair .compact { min-height: 44px; flex: 0 0 auto; }
   .library-tools input { font-size: 16px; }
   .group-filter select { flex: 1; max-width: none; min-height: 44px; font-size: 16px; }
   .label-filter button { min-height: 44px; flex: 1 1 auto; }

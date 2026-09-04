@@ -39,12 +39,12 @@ describe("capture import", () => {
 
   it("preserves the mastery label when refreshing a duplicate", () => {
     const first = prepareImport(makeCaptureBundle([question]), [], new Date("2026-08-28T12:00:00Z"));
-    const reviewed = { ...first.cards[0], masteryRating: MasteryRating.Easy, ratingUpdatedAt: "2026-08-29T12:00:00.000Z" };
+    const reviewed = { ...first.cards[0], masteryRating: MasteryRating.KeepFresh, ratingUpdatedAt: "2026-08-29T12:00:00.000Z" };
     const second = prepareImport(makeCaptureBundle([question]), [reviewed], new Date("2026-08-30T12:00:00Z"));
 
     expect(second.added).toBe(0);
     expect(second.updated).toBe(1);
-    expect(second.cards[0]).toMatchObject({ masteryRating: MasteryRating.Easy, ratingUpdatedAt: "2026-08-29T12:00:00.000Z" });
+    expect(second.cards[0]).toMatchObject({ masteryRating: MasteryRating.KeepFresh, ratingUpdatedAt: "2026-08-29T12:00:00.000Z" });
   });
 
   it("combines multiple captures and deduplicates repeated questions", () => {
@@ -109,7 +109,7 @@ describe("capture import", () => {
       version: 2,
       questions: imported.questions,
       cards: imported.cards,
-      reviews: [{ id: "old-review", cardId: imported.cards[0].id, rating: MasteryRating.Easy, reviewedAt: "2026-08-28T12:01:00Z" }],
+      reviews: [{ id: "old-review", cardId: imported.cards[0].id, rating: MasteryRating.KeepFresh, reviewedAt: "2026-08-28T12:01:00Z" }],
     });
 
     expect(restored.cards[0]).toMatchObject({ masteryRating: null, ratingUpdatedAt: null });

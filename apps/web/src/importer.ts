@@ -94,7 +94,7 @@ export function prepareLibraryRestore(input: unknown): PreparedLibraryRestore {
   const rawReviews = candidate.reviews.filter((value) => value && typeof value === "object" && "id" in value && "cardId" in value) as ReviewLog[];
   const latestRatings = new Map<string, ReviewLog>();
   for (const review of rawReviews) {
-    if (![MasteryRating.Again, MasteryRating.Hard, MasteryRating.Good, MasteryRating.Easy].includes(review.rating)) continue;
+    if (![MasteryRating.Again, MasteryRating.Hard, MasteryRating.Good, MasteryRating.KeepFresh, MasteryRating.GotIt].includes(review.rating)) continue;
     const current = latestRatings.get(review.cardId);
     if (!current || current.reviewedAt < review.reviewedAt) latestRatings.set(review.cardId, review);
   }
@@ -104,7 +104,7 @@ export function prepareLibraryRestore(input: unknown): PreparedLibraryRestore {
   if (candidate.version === 1) {
     for (const session of studyHistory) {
       for (const result of session.results) {
-        if (![MasteryRating.Again, MasteryRating.Hard, MasteryRating.Good, MasteryRating.Easy].includes(result.rating)) continue;
+        if (![MasteryRating.Again, MasteryRating.Hard, MasteryRating.Good, MasteryRating.KeepFresh, MasteryRating.GotIt].includes(result.rating)) continue;
         const current = latestRatings.get(result.cardId);
         if (!current || current.reviewedAt < result.answeredAt) {
           latestRatings.set(result.cardId, {

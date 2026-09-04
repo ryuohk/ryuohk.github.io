@@ -67,7 +67,8 @@ function isMasteryRating(value: unknown): value is ReviewLog["rating"] {
   return value === MasteryRating.Again
     || value === MasteryRating.Hard
     || value === MasteryRating.Good
-    || value === MasteryRating.Easy;
+    || value === MasteryRating.KeepFresh
+    || value === MasteryRating.GotIt;
 }
 
 export async function ensureMasteryProgress(): Promise<void> {
