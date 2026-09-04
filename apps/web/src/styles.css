@@ -228,14 +228,37 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .library-tools { display: flex; align-items: center; gap: 15px; }
 .library-tools input { flex: 1; border: 1px solid #dce2ec; border-radius: 11px; padding: 13px 15px; background: white; outline: none; }
 .library-tools input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px #2563eb1a; }
+/* Wraps under the search box on a narrow window rather than squeezing it out. */
+.label-filter { display: flex; gap: 4px; flex-wrap: wrap; padding: 4px; border-radius: 11px; background: #f0f3f8; }
+.label-filter button { border: 0; border-radius: 8px; padding: 9px 12px; color: #627087; background: transparent; font-size: 12px; font-weight: 750; white-space: nowrap; }
+.label-filter button.active { color: #185ac5; background: white; box-shadow: 0 2px 8px #17243a14; }
+/* The count is the reason to reach for a label, so it stays legible when unselected. */
+.label-filter b { color: #8a94a6; font-weight: 800; }
+.label-filter button.active b { color: #4b7fd4; }
+.group-filter { display: flex; align-items: center; gap: 8px; color: #66758b; font-size: 11px; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; }
+.group-filter select { min-height: 39px; max-width: 220px; border: 1px solid #d8deea; border-radius: 9px; padding: 6px 26px 6px 10px; color: #35445c; background: white; font-size: 13px; text-transform: none; letter-spacing: 0; }
+/* Wider than the danger panel, because a group name is longer than a verb. */
+.group-menu .more-panel { min-width: 240px; gap: 7px; }
+.group-menu .more-panel form { display: flex; gap: 7px; }
+.group-menu .more-panel input { flex: 1; min-width: 0; min-height: 33px; border: 1px solid #d8deea; border-radius: 8px; padding: 6px 9px; color: #35445c; background: white; }
+.group-menu .more-panel button { width: 100%; }
+.group-menu .more-panel form button { width: auto; flex: 0 0 auto; }
+.group-menu-hint { margin: 2px 0 0; color: #8a94a6; font-size: 11px; }
+/* Quieter than the exam tag beside it: the exam is what a question is, a group is
+   what you decided about it. */
+.group-chip { border: 1px solid #dbe6f7; border-radius: 999px; padding: 4px 9px; color: #4b6da8; background: #f2f6fd; font-size: 10px; font-weight: 800; text-transform: none; letter-spacing: 0; }
+.group-chip:hover { border-color: #b9cdec; color: #23477f; background: #e6eefb; }
 .card-list { display: grid; gap: 11px; }
 .card-list article { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: start; border: 1px solid #e0e5ed; border-radius: 13px; padding: 18px 20px; background: white; transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
 .card-list article.selected { border-color: #7ba6ed; background: #f8fbff; box-shadow: 0 0 0 2px #2563eb14; }
 .card-checkbox { display: grid; padding-top: 1px; cursor: pointer; }
 .card-checkbox input { width: 18px; height: 18px; margin: 0; accent-color: #2563eb; cursor: pointer; }
 .library-card-content { min-width: 0; }
-.library-card-meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.library-card-actions { display: flex; align-items: center; gap: 12px; }
+/* Group chips sit between the exam tag and the actions, so the row wraps rather than
+   squeezing, and the actions are pushed right by margin instead of space-between,
+   which would otherwise scatter the chips across the gap. */
+.library-card-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.library-card-actions { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 .tag { color: #2563eb; font-size: 11px; font-weight: 800; }
 .card-list h3 { margin: 10px 0 6px; color: #1d2a40; font-size: 15px; line-height: 1.45; }
 .card-list p { margin: 0; color: #607087; font-size: 13px; white-space: pre-wrap; }
@@ -305,7 +328,10 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .library-bulk-actions > .more-menu { flex: 0 0 auto; }
   .library-bulk-actions > .more-menu > summary { min-height: 44px; padding-inline: 14px; }
   .danger-menu .more-panel button { flex: none; }
+  .library-tools { align-items: stretch; flex-direction: column; gap: 10px; }
   .library-tools input { font-size: 16px; }
+  .group-filter select { flex: 1; max-width: none; min-height: 44px; font-size: 16px; }
+  .label-filter button { min-height: 44px; flex: 1 1 auto; }
   .card-list article { padding: 16px 14px; }
   .library-card-meta { align-items: start; }
   .library-card-actions .danger-link { min-height: 44px; }

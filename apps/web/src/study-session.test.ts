@@ -1,14 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
+  addCardsToGroup,
   addCardsToMasterySession,
   advanceStudySession,
+  cardLabel,
+  cleanCardGroups,
   cleanMasteryCardIds,
+  countCardsByLabel,
   createStudySession,
+  deleteGroup,
   evaluateAnswer,
+  filterCardsByGroup,
+  filterCardsByLabel,
   filterEasyReviewPool,
   filterMasteryPool,
+  filterUngroupedCards,
+  findGroupName,
+  groupsForCard,
+  listGroupNames,
+  normalizeGroupName,
   planEasyReview,
   planMasteryAdditions,
+  removeCardsFromGroup,
+  renameGroup,
   reviseStudyResult,
   selectMasteryAdditions,
   summarizeStudySession,
@@ -26,6 +40,7 @@ const settings: StudySettings = {
   easyReviewScope: "batch",
   easyReviewSize: 2,
   masteryCardIds: [],
+  cardGroups: {},
   speakQuestions: false,
   speechRate: 1.1,
   speechVolume: 1,
@@ -105,6 +120,110 @@ describe("mastery study sessions", () => {
     expect(expanded.queue).toEqual(["one", "two"]);
     expect(expanded.order).toEqual(["one", "two"]);
     expect(expanded.total).toBe(2);
+  });
+
+  /**
+   * Personal groups.
+   *
+   * A question can be in several at once, which is the point: one question can be
+   * about both networking and cost, and being made to pick one would defeat grouping.
+   */
+  it("puts a question in several groups without moving it", () => {
+    let groups = addCardsToGroup({}, "Networking", ["a", "b"]);
+    groups = addCardsToGroup(groups, "Cost", ["b", "c"]);
+
+    expect(listGroupNames(groups)).toEqual(["Cost", "Networking"]);
+    expect(groupsForCard(groups, "b")).toEqual(["Cost", "Networking"]);
+    expect(groupsForCard(groups, "a")).toEqual(["Networking"]);
+  });
+
+  // Two groups an hour apart that look identical in the filter is the failure here.
+  it("treats a name typed in another case as the group that already exists", () => {
+    const groups = addCardsToGroup(addCardsToGroup({}, "Networking", ["a"]), "  networking ", ["b"]);
+
+    expect(listGroupNames(groups)).toEqual(["Networking"]);
+    expect(groups.Networking).toEqual(["a", "b"]);
+    expect(findGroupName(groups, "NETWORKING")).toBe("Networking");
+    expect(findGroupName(groups, "Storage")).toBeNull();
+  });
+
+  it("refuses a name that is only whitespace rather than making one nobody can see", () => {
+    expect(normalizeGroupName("   ")).toBe("");
+    expect(addCardsToGroup({}, "   ", ["a"])).toEqual({});
+    expect(normalizeGroupName("  Two   words  ")).toBe("Two words");
+  });
+
+  it("drops a group emptied of its last question", () => {
+    const groups = addCardsToGroup({}, "Networking", ["a", "b"]);
+
+    expect(removeCardsFromGroup(groups, "Networking", ["a"])).toEqual({ Networking: ["b"] });
+    expect(removeCardsFromGroup(groups, "Networking", ["a", "b"])).toEqual({});
+  });
+
+  it("merges on a rename into a name that is taken, and keeps a recapitalization", () => {
+    const groups = { Networking: ["a", "b"], Cost: ["b", "c"] };
+
+    expect(renameGroup(groups, "Cost", "Networking")).toEqual({ Networking: ["a", "b", "c"] });
+    // The same group, spelled differently: the ids stay, the capitalization changes.
+    expect(renameGroup(groups, "Cost", "cost")).toEqual({ Networking: ["a", "b"], cost: ["b", "c"] });
+  });
+
+  /**
+   * Deleting a question does not know what it was grouped under, so without this a
+   * group fills with ids matching nothing and its count stops agreeing with the list.
+   */
+  it("prunes deleted questions from groups, and groups left empty by that", () => {
+    const groups = { Networking: ["a", "gone"], Retired: ["gone"] };
+
+    expect(cleanCardGroups(groups, [card("a"), card("b")])).toEqual({ Networking: ["a"] });
+  });
+
+  it("selects a group's questions and the ones in no group at all", () => {
+    const cards = [card("a"), card("b"), card("c")];
+    const groups = { Networking: ["a", "b"] };
+
+    expect(filterCardsByGroup(cards, groups, "networking").map(({ id }) => id)).toEqual(["a", "b"]);
+    expect(filterCardsByGroup(cards, groups, "Missing")).toEqual([]);
+    expect(filterUngroupedCards(cards, groups).map(({ id }) => id)).toEqual(["c"]);
+  });
+
+  it("removes a group without touching the questions in it", () => {
+    expect(deleteGroup({ Networking: ["a"], Cost: ["b"] }, "networking")).toEqual({ Cost: ["b"] });
+  });
+
+  /**
+   * The library's label filter.
+   *
+   * Three labels, because three is what the library shows. The retired Hard and Good
+   * ratings read as Not yet here, as they do everywhere else: they behave as in-pool,
+   * and giving them a category of their own would file questions you can still be
+   * asked somewhere nobody would look for them.
+   */
+  it("files every rating under one of the three labels the library shows", () => {
+    expect(cardLabel(card("a"))).toBe("unrated");
+    expect(cardLabel(card("b", MasteryRating.Again))).toBe("not-yet");
+    expect(cardLabel(card("c", MasteryRating.Hard))).toBe("not-yet");
+    expect(cardLabel(card("d", MasteryRating.Good))).toBe("not-yet");
+    expect(cardLabel(card("e", MasteryRating.Easy))).toBe("got-it");
+  });
+
+  it("filters the library by label and counts every label at once", () => {
+    const cards = [
+      card("unlabelled"),
+      card("again", MasteryRating.Again),
+      card("hard", MasteryRating.Hard),
+      card("easy", MasteryRating.Easy),
+    ];
+
+    expect(filterCardsByLabel(cards, "all")).toHaveLength(4);
+    expect(filterCardsByLabel(cards, "not-yet").map(({ id }) => id)).toEqual(["again", "hard"]);
+    expect(filterCardsByLabel(cards, "got-it").map(({ id }) => id)).toEqual(["easy"]);
+    expect(filterCardsByLabel(cards, "unrated").map(({ id }) => id)).toEqual(["unlabelled"]);
+    expect(countCardsByLabel(cards)).toEqual({ all: 4, "not-yet": 2, "got-it": 1, unrated: 1 });
+  });
+
+  it("counts an empty library without inventing a label", () => {
+    expect(countCardsByLabel([])).toEqual({ all: 0, "not-yet": 0, "got-it": 0, unrated: 0 });
   });
 
   it("prunes missing, duplicate, and Easy cards from a saved Mastery pool", () => {

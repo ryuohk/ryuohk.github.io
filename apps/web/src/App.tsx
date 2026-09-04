@@ -37,15 +37,28 @@ import {
 } from "./db";
 import { prepareImportSelection } from "./importer";
 import {
+  addCardsToGroup,
   addCardsToMasterySession,
   advanceStudySession,
   reviseStudyResult,
+  cleanCardGroups,
   cleanMasteryCardIds,
+  countCardsByLabel,
   createStudySession,
+  deleteGroup,
   evaluateAnswer,
+  filterCardsByGroup,
+  filterCardsByLabel,
   filterEasyReviewPool,
   filterMasteryPool,
+  filterUngroupedCards,
+  findGroupName,
+  groupsForCard,
+  listGroupNames,
   normalizeAnswerLabel,
+  normalizeGroupName,
+  removeCardsFromGroup,
+  renameGroup,
   planEasyReview,
   planMasteryAdditions,
   selectMasteryAdditions,
@@ -53,6 +66,8 @@ import {
   shuffleItems,
   summarizeStudySession,
   updateMasteryCardIds,
+  type CardGroups,
+  type LabelFilter,
   type StudyMode,
   type StudySession,
   type StudySettings,
@@ -75,6 +90,7 @@ const DEFAULT_STUDY_SETTINGS: StudySettings = {
   easyReviewScope: "all",
   easyReviewSize: 20,
   masteryCardIds: [],
+  cardGroups: {},
   speakQuestions: false,
   speechRate: DEFAULT_SPEECH_RATE,
   speechVolume: DEFAULT_SPEECH_VOLUME,
@@ -101,6 +117,33 @@ const RATING_OPTIONS = [
   { value: MasteryRating.Easy, label: "Got it", tone: "easy" },
 ] as const;
 
+/**
+ * The library's label filter, in the order the labels are earned.
+ *
+ * The words match the buttons in Study and the badge on each row, because a filter
+ * that renamed them would leave you guessing which of two vocabularies you were
+ * choosing from. Unrated is last: it is the absence of a label, not a third one.
+ */
+const LABEL_FILTERS: readonly { value: LabelFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "not-yet", label: "Not yet" },
+  { value: "got-it", label: "Got it" },
+  { value: "unrated", label: "Unrated" },
+];
+
+/**
+ * The two library views that are not a group, and the prefix that marks one that is.
+ *
+ * A group can be called anything, "all" included, so the filter cannot be a bare name.
+ */
+const ALL_GROUPS = "all";
+const UNGROUPED = "ungrouped";
+const GROUP_PREFIX = "group:";
+
+function selectedGroupName(filter: string): string | null {
+  return filter.startsWith(GROUP_PREFIX) ? filter.slice(GROUP_PREFIX.length) : null;
+}
+
 function normalizeQuestionCount(value: unknown, fallback: number): number {
   const count = typeof value === "number" ? value : Number.NaN;
   return Number.isFinite(count) ? Math.max(1, Math.floor(count)) : fallback;
@@ -108,6 +151,28 @@ function normalizeQuestionCount(value: unknown, fallback: number): number {
 
 function normalizeCardIds(value: unknown): string[] {
   return Array.isArray(value) ? [...new Set(value.filter((item): item is string => typeof item === "string" && item.length > 0))] : [];
+}
+
+/**
+ * Rebuilds the group map from stored or restored JSON, discarding anything malformed.
+ *
+ * These settings come back from localStorage, from another device through sync, and
+ * from a backup file, and the last of those is a file a person can edit. A group with
+ * no name or no members is dropped rather than kept as something the filter would
+ * offer and the list would never fill.
+ */
+function normalizeCardGroups(value: unknown): CardGroups {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const groups: CardGroups = {};
+  for (const [rawName, cardIds] of Object.entries(value as Record<string, unknown>)) {
+    const name = normalizeGroupName(rawName);
+    const members = normalizeCardIds(cardIds);
+    if (!name || members.length === 0) continue;
+    // A file could hold "Networking" and "networking" as separate keys; fold them.
+    const existing = findGroupName(groups, name);
+    groups[existing ?? name] = [...new Set([...(existing ? groups[existing] : []), ...members])];
+  }
+  return groups;
 }
 
 function readStudySettings(session: StudySession | null = null): StudySettings {
@@ -130,6 +195,7 @@ function readStudySettings(session: StudySession | null = null): StudySettings {
       easyReviewScope: stored.easyReviewScope === "batch" ? "batch" : "all",
       easyReviewSize: normalizeQuestionCount(stored.easyReviewSize, migratedCount),
       masteryCardIds: [...new Set([...masteryCardIds, ...legacySessionIds])],
+      cardGroups: normalizeCardGroups(stored.cardGroups),
       speakQuestions: stored.speakQuestions === true,
       speechRate: normalizeSpeechRate(stored.speechRate),
       speechVolume: normalizeSpeechVolume(stored.speechVolume),
@@ -257,6 +323,46 @@ function MoreMenu({ label, title, className, children }: { label: ReactNode; tit
   );
 }
 
+/**
+ * Files the current selection under a group, existing or new.
+ *
+ * One control for both, because "add these to Networking" and "add these to a group I
+ * am inventing now" are the same intention and splitting them into two buttons makes
+ * you decide which one you are doing before you have decided anything.
+ *
+ * The panel stays open after a pick, deliberately: filing a selection under two
+ * groups at once is ordinary, and the notice underneath already confirms each one.
+ */
+function GroupPicker({ names, selectionSize, onPick }: { names: readonly string[]; selectionSize: number; onPick: (name: string) => void }) {
+  const [draft, setDraft] = useState("");
+  const pending = normalizeGroupName(draft);
+  const taken = names.some((name) => name.toLowerCase() === pending.toLowerCase());
+  return (
+    <MoreMenu className="group-menu" title="File the selected questions under a group" label="Add to group ▾">
+      {selectionSize === 0
+        ? <p className="group-menu-hint">Select some questions first, then file them under a group.</p>
+        : <>
+          <form onSubmit={(event) => { event.preventDefault(); if (!pending) return; onPick(pending); setDraft(""); }}>
+            <input
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder="New group"
+              aria-label="New group name"
+              maxLength={48}
+            />
+            <button className="primary compact" type="submit" disabled={!pending}>
+              {taken ? "Add" : "Create"}
+            </button>
+          </form>
+          {names.length > 0 && <p className="group-menu-hint">Or one you already have:</p>}
+          {names.map((name) => (
+            <button key={name} className="secondary compact" onClick={() => onPick(name)}>{name}</button>
+          ))}
+        </>}
+    </MoreMenu>
+  );
+}
+
 function CapturedText({ text: raw, as: Element, className }: { text: string; as: CapturedTextElement; className?: string }) {
   // Idempotent, so prose that came through splitCardFront already is unharmed.
   const text = repairRunTogetherText(raw);
@@ -312,6 +418,13 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   const [studySession, setStudySession] = useState<StudySession | null>(restoredSession);
   const [revealed, setRevealed] = useState(false);
   const [query, setQuery] = useState("");
+  // Not persisted, unlike the exam filter. That one says which course you are on and
+  // holds between visits; this one narrows a list you are looking at right now, and
+  // coming back to a library that silently hides most of itself is a bug report.
+  const [labelFilter, setLabelFilter] = useState<LabelFilter>("all");
+  // Prefixed rather than a bare name, so a group called "all" or "ungrouped" cannot
+  // be mistaken for the two options that are not groups.
+  const [groupFilter, setGroupFilter] = useState<string>(ALL_GROUPS);
   const [examFilter, setExamFilter] = useState(readExamFilter);
   const [extensionInfo, setExtensionInfo] = useState<{ version: string; bytes: number } | null>(null);
   const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(() => new Set());
@@ -325,7 +438,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
       .then(([storedCards, storedQuestions]) => {
         setCards(storedCards);
         setQuestions(storedQuestions);
-        setStudySettings((existing) => ({ ...existing, masteryCardIds: cleanMasteryCardIds(storedCards, existing.masteryCardIds) }));
+        setStudySettings((existing) => ({ ...existing, masteryCardIds: cleanMasteryCardIds(storedCards, existing.masteryCardIds), cardGroups: cleanCardGroups(existing.cardGroups, storedCards) }));
         setNotice(storedCards.length ? restoredSession ? "Resumed your saved study session." : "" : "Import your first capture to begin.");
         if (restoredSession) {
           const availableIds = new Set(storedCards.map((card) => card.id));
@@ -350,7 +463,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
       void Promise.all([listCards(), listQuestions()]).then(([storedCards, storedQuestions]) => {
         setCards(storedCards);
         setQuestions(storedQuestions);
-        setStudySettings((existing) => ({ ...existing, masteryCardIds: cleanMasteryCardIds(storedCards, existing.masteryCardIds) }));
+        setStudySettings((existing) => ({ ...existing, masteryCardIds: cleanMasteryCardIds(storedCards, existing.masteryCardIds), cardGroups: cleanCardGroups(existing.cardGroups, storedCards) }));
       });
     }
     // Only a set genuinely handed over from another device replaces what is on screen.
@@ -490,12 +603,48 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   const sessionFinished = Boolean(studySession && studySession.queue.length === 0 && !viewingHistory);
   const sessionSummary = studySession ? summarizeStudySession(studySession) : null;
 
+  // Counted before the search narrows anything, so the filter reports what the exam
+  // holds rather than what the words you have typed so far happen to leave.
+  const labelCounts = useMemo(() => countCardsByLabel(examCards), [examCards]);
+
+  const cardGroups = studySettings.cardGroups;
+  const groupNames = useMemo(() => listGroupNames(cardGroups), [cardGroups]);
+  // Scoped to the exam, so switching exams does not offer groups with nothing in them.
+  const groupCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const name of groupNames) counts.set(name, filterCardsByGroup(examCards, cardGroups, name).length);
+    return counts;
+  }, [cardGroups, examCards, groupNames]);
+  const ungroupedCount = useMemo(() => filterUngroupedCards(examCards, cardGroups).length, [cardGroups, examCards]);
+  // One pass for the whole list rather than a scan per row.
+  const groupsByCardId = useMemo(() => {
+    const byCard = new Map<string, string[]>();
+    for (const name of groupNames) {
+      for (const cardId of cardGroups[name]) byCard.set(cardId, [...(byCard.get(cardId) ?? []), name]);
+    }
+    return byCard;
+  }, [cardGroups, groupNames]);
+  const activeGroup = selectedGroupName(groupFilter);
+
+  // A group that empties out, or an exam that has none of its questions, would leave
+  // the library looking empty for a reason nothing on screen explains.
+  useEffect(() => {
+    if (activeGroup && !findGroupName(cardGroups, activeGroup)) setGroupFilter(ALL_GROUPS);
+  }, [activeGroup, cardGroups]);
+
   const filteredCards = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return examCards
-      .filter((card) => !needle || `${card.front} ${card.back} ${card.notes ?? ""} ${card.tags.join(" ")}`.toLowerCase().includes(needle))
+    const scoped = activeGroup
+      ? filterCardsByGroup(examCards, cardGroups, activeGroup)
+      : groupFilter === UNGROUPED
+        ? filterUngroupedCards(examCards, cardGroups)
+        : examCards;
+    return filterCardsByLabel(scoped, labelFilter)
+      // Group names join the haystack, so searching "networking" finds the questions
+      // you filed under it even when the word appears nowhere in the question itself.
+      .filter((card) => !needle || `${card.front} ${card.back} ${card.notes ?? ""} ${card.tags.join(" ")} ${(groupsByCardId.get(card.id) ?? []).join(" ")}`.toLowerCase().includes(needle))
       .sort((left, right) => left.front.localeCompare(right.front));
-  }, [examCards, query]);
+  }, [activeGroup, cardGroups, examCards, groupFilter, groupsByCardId, labelFilter, query]);
   const selectedCards = useMemo(() => examCards.filter((card) => selectedCardIds.has(card.id)), [examCards, selectedCardIds]);
   const allFilteredSelected = filteredCards.length > 0 && filteredCards.every((card) => selectedCardIds.has(card.id));
 
@@ -517,6 +666,9 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
             easyReviewScope: restored.easyReviewScope === "batch" ? "batch" : "all",
             easyReviewSize: normalizeQuestionCount(restored.easyReviewSize, count),
             masteryCardIds: normalizeCardIds(restored.masteryCardIds),
+            // A backup predating groups carries none, so this device keeps its own
+            // rather than having them wiped by restoring an older library.
+            cardGroups: restored.cardGroups ? normalizeCardGroups(restored.cardGroups) : existing.cardGroups,
             speakQuestions: restored.speakQuestions ?? existing.speakQuestions,
             speechRate: normalizeSpeechRate(restored.speechRate ?? existing.speechRate),
             speechVolume: normalizeSpeechVolume(restored.speechVolume ?? existing.speechVolume),
@@ -530,7 +682,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
       const [refreshedCards, refreshedQuestions] = await Promise.all([listCards(), listQuestions()]);
       setCards(refreshedCards);
       setQuestions(refreshedQuestions);
-      setStudySettings((existing) => ({ ...existing, masteryCardIds: cleanMasteryCardIds(refreshedCards, existing.masteryCardIds) }));
+      setStudySettings((existing) => ({ ...existing, masteryCardIds: cleanMasteryCardIds(refreshedCards, existing.masteryCardIds), cardGroups: cleanCardGroups(existing.cardGroups, refreshedCards) }));
       setSelectedCardIds(new Set());
       setStudySession(null);
       setStudyMode("mastery");
@@ -672,6 +824,63 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     if (selected.has(choice)) selected.delete(choice);
     else selected.add(choice);
     setStudySession((existing) => existing ? setSessionAnswer(existing, currentCard.id, [...selected]) : null);
+  }
+
+  /**
+   * Files the selected questions under a group, creating it if it is new.
+   *
+   * Groups are yours alone. They ride in your study settings, which sync between your
+   * own devices and never reach the shared library, so grouping questions by what they
+   * have in common is a note to yourself rather than an edit to everyone's copy.
+   */
+  function addSelectedToGroup(rawName: string) {
+    const name = normalizeGroupName(rawName);
+    if (!name || selectedCards.length === 0) return;
+    const cardIds = selectedCards.map((card) => card.id);
+    const existingName = findGroupName(cardGroups, name);
+    const alreadyIn = new Set(existingName ? cardGroups[existingName] : []);
+    const added = cardIds.filter((cardId) => !alreadyIn.has(cardId)).length;
+    setStudySettings((existing) => ({ ...existing, cardGroups: addCardsToGroup(existing.cardGroups, name, cardIds) }));
+    setNotice(added === 0
+      ? `Already in ${existingName ?? name}.`
+      : `${added} question${added === 1 ? "" : "s"} added to ${existingName ?? name}.`);
+  }
+
+  function removeSelectedFromGroup(name: string) {
+    if (selectedCards.length === 0) return;
+    const cardIds = selectedCards.map((card) => card.id);
+    const remaining = removeCardsFromGroup(cardGroups, name, cardIds);
+    const removed = (cardGroups[name]?.length ?? 0) - (remaining[name]?.length ?? 0);
+    if (removed === 0) {
+      setNotice(`None of the selected questions are in ${name}.`);
+      return;
+    }
+    setStudySettings((existing) => ({ ...existing, cardGroups: removeCardsFromGroup(existing.cardGroups, name, cardIds) }));
+    setSelectedCardIds(new Set());
+    setNotice(remaining[name]
+      ? `${removed} question${removed === 1 ? "" : "s"} removed from ${name}.`
+      : `${name} is empty now, so it has been removed.`);
+  }
+
+  function handleRenameGroup(name: string) {
+    const wanted = window.prompt(`Rename ${name} to:`, name);
+    if (wanted === null) return;
+    const next = normalizeGroupName(wanted);
+    if (!next || next === name) return;
+    const merging = findGroupName(cardGroups, next);
+    if (merging && merging !== name && !window.confirm(`${merging} already exists. Merge ${name} into it?`)) return;
+    setStudySettings((existing) => ({ ...existing, cardGroups: renameGroup(existing.cardGroups, name, next) }));
+    setGroupFilter(`${GROUP_PREFIX}${merging ?? next}`);
+    setNotice(merging && merging !== name ? `${name} merged into ${merging}.` : `Renamed to ${next}.`);
+  }
+
+  /** Only the grouping goes; the questions and your labels on them are untouched. */
+  function handleDeleteGroup(name: string) {
+    const count = cardGroups[name]?.length ?? 0;
+    if (!window.confirm(`Remove the group ${name}? The ${count} question${count === 1 ? "" : "s"} in it stay in your library, along with your labels.`)) return;
+    setStudySettings((existing) => ({ ...existing, cardGroups: deleteGroup(existing.cardGroups, name) }));
+    setGroupFilter(ALL_GROUPS);
+    setNotice(`${name} removed. Its questions are still in your library.`);
   }
 
   /**
@@ -1298,14 +1507,53 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
 
         {view === "library" && (
           <section className="library">
-            <div className="library-tools"><input type="search" aria-label="Search question library" placeholder="Search questions, answers, notes, or tags" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
+            <div className="library-tools">
+              <input type="search" aria-label="Search question library" placeholder="Search questions, answers, notes, groups, or tags" value={query} onChange={(event) => setQuery(event.target.value)} />
+              <label className="group-filter">
+                <span>Group</span>
+                <select
+                  value={groupFilter}
+                  // Same reasoning as the label filter: a selection made under one
+                  // view must not act on rows another view hides.
+                  onChange={(event) => { setGroupFilter(event.target.value); setSelectedCardIds(new Set()); }}
+                >
+                  <option value={ALL_GROUPS}>All groups ({examCards.length})</option>
+                  {groupNames.map((name) => (
+                    <option key={name} value={`${GROUP_PREFIX}${name}`}>{name} ({groupCounts.get(name) ?? 0})</option>
+                  ))}
+                  <option value={UNGROUPED}>Ungrouped ({ungroupedCount})</option>
+                </select>
+              </label>
+              <div className="label-filter" role="group" aria-label="Filter by label">
+                {LABEL_FILTERS.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    className={labelFilter === value ? "active" : ""}
+                    aria-pressed={labelFilter === value}
+                    // Selecting across a filter you then change would act on rows you
+                    // can no longer see, so the selection goes with the view.
+                    onClick={() => { setLabelFilter(value); setSelectedCardIds(new Set()); }}
+                  >{label} <b>{labelCounts[value]}</b></button>
+                ))}
+              </div>
+            </div>
             <div className="library-manager">
-              <div><strong>{examFilter === ALL_EXAMS ? `${cards.length} question${cards.length === 1 ? "" : "s"} in your library` : `${examCards.length} ${examFilter} question${examCards.length === 1 ? "" : "s"} (${cards.length} total)`}</strong><span>{selectedCardIds.size ? `${selectedCardIds.size} selected` : `${filteredCards.length} shown`}</span></div>
+              <div><strong>{examFilter === ALL_EXAMS ? `${cards.length} question${cards.length === 1 ? "" : "s"} in your library` : `${examCards.length} ${examFilter} question${examCards.length === 1 ? "" : "s"} (${cards.length} total)`}</strong><span>{selectedCardIds.size
+                ? `${selectedCardIds.size} selected`
+                : activeGroup
+                  ? `${filteredCards.length} shown in ${activeGroup}`
+                  : `${filteredCards.length} shown`}</span></div>
               <div className="library-bulk-actions">
                 <button className="secondary compact" disabled={busy || filteredCards.length === 0} onClick={toggleFilteredSelection}>{allFilteredSelected ? "Clear shown" : `Select shown (${filteredCards.length})`}</button>
                 <button className="primary compact" disabled={busy || selectedCards.length === 0} onClick={() => void handleAddSelectedToPool()}>Add to Mastery pool</button>
+                <GroupPicker names={groupNames} selectionSize={selectedCards.length} onPick={addSelectedToGroup} />
                 <button className="danger-button" disabled={busy || selectedCards.filter(canDeleteCard).length === 0} onClick={() => void handleRemove(selectedCards, "selected")}>Delete selected</button>
                 <MoreMenu className="danger-menu" title="Actions that cannot be undone" label="⋯">
+                  {activeGroup && <>
+                    <button className="secondary compact" disabled={busy || selectedCards.length === 0} onClick={() => removeSelectedFromGroup(activeGroup)}>Remove selected from {activeGroup}</button>
+                    <button className="secondary compact" disabled={busy} onClick={() => handleRenameGroup(activeGroup)}>Rename {activeGroup}</button>
+                    <button className="danger-button" disabled={busy} onClick={() => handleDeleteGroup(activeGroup)}>Remove the group {activeGroup}</button>
+                  </>}
                   <button className="danger-button" disabled={busy || examCards.length === 0} onClick={() => void handleReset()}>{examFilter === ALL_EXAMS ? "Reset all labels" : `Reset ${examFilter} labels`}</button>
                   <button className="danger-button danger-solid" disabled={busy || examCards.filter(canDeleteCard).length === 0} onClick={() => void handleRemove(examCards, "all")}>{examFilter === ALL_EXAMS ? "Delete all questions" : `Delete all ${examFilter} questions`}</button>
                 </MoreMenu>
@@ -1315,15 +1563,37 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
               {filteredCards.map((card) => {
                 const content = splitCardFront(card.front);
                 const selected = selectedCardIds.has(card.id);
+                const memberOf = groupsByCardId.get(card.id) ?? [];
                 return <article className={selected ? "selected" : ""} key={card.id}>
                   <label className="card-checkbox"><input type="checkbox" checked={selected} onChange={() => toggleSelection(card.id)} aria-label={`Select question: ${content.prompt}`} /></label>
                   <div className="library-card-content">
-                    <div className="library-card-meta"><span className="tag">{card.tags.join(" · ") || "Uncategorized"}</span><div className="library-card-actions"><span className={`mastery-label label-${ratingTone(card.masteryRating)}`}>{ratingLabel(card.masteryRating)}</span><button className="danger-link" disabled={busy || !canDeleteCard(card)} title={canDeleteCard(card) ? undefined : "Only the person who contributed this question, or a library owner, can delete it."} onClick={() => void handleRemove([card], "single")}>Delete</button></div></div>
+                    <div className="library-card-meta"><span className="tag">{card.tags.join(" · ") || "Uncategorized"}</span>
+                      {/* Clickable, because seeing a group on one question is exactly
+                          when you want the rest of what is in it. */}
+                      {memberOf.map((name) => (
+                        <button
+                          key={name}
+                          className="group-chip"
+                          title={`Show everything in ${name}`}
+                          onClick={() => { setGroupFilter(`${GROUP_PREFIX}${name}`); setSelectedCardIds(new Set()); }}
+                        >{name}</button>
+                      ))}
+                      <div className="library-card-actions"><span className={`mastery-label label-${ratingTone(card.masteryRating)}`}>{ratingLabel(card.masteryRating)}</span><button className="danger-link" disabled={busy || !canDeleteCard(card)} title={canDeleteCard(card) ? undefined : "Only the person who contributed this question, or a library owner, can delete it."} onClick={() => void handleRemove([card], "single")}>Delete</button></div></div>
                     <CapturedText text={content.prompt} as="h3" /><p><strong>Answer:</strong> {card.back}</p>{card.notes && <p><strong>Notes:</strong> {card.notes}</p>}
                   </div>
                 </article>;
               })}
-              {!filteredCards.length && <div className="empty-inline">{cards.length ? "No questions match this search." : "No questions in your library yet."}</div>}
+              {!filteredCards.length && <div className="empty-inline">{!cards.length
+                ? "No questions in your library yet."
+                : query.trim()
+                  ? "No questions match this search."
+                  : activeGroup
+                    ? `Nothing in ${activeGroup} for this exam and label.`
+                    : groupFilter === UNGROUPED
+                      ? "Every question here is in a group."
+                      : labelFilter === "all"
+                        ? "No questions match this search."
+                        : `Nothing is labelled ${LABEL_FILTERS.find(({ value }) => value === labelFilter)?.label} here yet.`}</div>}
             </div>
           </section>
         )}

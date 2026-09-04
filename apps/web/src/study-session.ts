@@ -21,6 +21,8 @@ export interface StudySettings {
   /** Questions per part. Only read when the scope is "batch". */
   easyReviewSize: number;
   masteryCardIds: string[];
+  /** Your own groupings of related questions. See CardGroups. */
+  cardGroups: CardGroups;
   /** Read each question aloud as it appears. Syncs, so it follows you between devices. */
   speakQuestions: boolean;
   /** Speaking rate, roughly 0.5 to 2. Voice choice stays per-device, see speech.ts. */
@@ -80,6 +82,153 @@ export function filterMasteryPool(cards: readonly StudyCard[], pool: MasteryPool
     }
     return true;
   });
+}
+
+/**
+ * Personal groupings of related questions, keyed by name.
+ *
+ * Name to ids rather than id to names, because the operations are all about the group:
+ * renaming one is a single key, deleting one is a single key, and listing what exists
+ * needs no scan. The inverse, what groups a question is in, is wanted only while
+ * rendering a row and is cheap to build once for the whole list.
+ *
+ * Rides in StudySettings, so it is carried between one person's own devices by the
+ * study-state sync and never reaches the shared library. Two people studying the same
+ * exam group questions for their own reasons, and neither should be editing the
+ * other's grouping.
+ */
+export type CardGroups = Record<string, string[]>;
+
+/** Names sort by what is typed rather than by case, so "azure" files with "Azure". */
+export function listGroupNames(groups: CardGroups): string[] {
+  return Object.keys(groups).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+}
+
+/**
+ * Trims and collapses whitespace, and caps the length.
+ *
+ * Returns an empty string for anything that is only whitespace, which callers treat
+ * as "no name given" rather than creating a group nobody can see or select.
+ */
+export function normalizeGroupName(name: string): string {
+  return String(name ?? "").replace(/\s+/g, " ").trim().slice(0, 48);
+}
+
+/**
+ * The stored spelling of a group matching `name`, ignoring case.
+ *
+ * Typing "networking" when "Networking" exists means the one that exists. Without
+ * this you get two groups an hour apart that look identical in the filter.
+ */
+export function findGroupName(groups: CardGroups, name: string): string | null {
+  const wanted = normalizeGroupName(name).toLowerCase();
+  if (!wanted) return null;
+  return Object.keys(groups).find((existing) => existing.toLowerCase() === wanted) ?? null;
+}
+
+export function groupsForCard(groups: CardGroups, cardId: string): string[] {
+  return listGroupNames(groups).filter((name) => groups[name].includes(cardId));
+}
+
+export function addCardsToGroup(groups: CardGroups, name: string, cardIds: readonly string[]): CardGroups {
+  const target = findGroupName(groups, name) ?? normalizeGroupName(name);
+  const additions = uniqueCardIds(cardIds);
+  if (!target || additions.length === 0) return groups;
+  return { ...groups, [target]: uniqueCardIds([...(groups[target] ?? []), ...additions]) };
+}
+
+/** A group emptied of its last question is removed: an empty one is only clutter. */
+export function removeCardsFromGroup(groups: CardGroups, name: string, cardIds: readonly string[]): CardGroups {
+  const target = findGroupName(groups, name);
+  if (!target) return groups;
+  const removing = new Set(cardIds);
+  const remaining = (groups[target] ?? []).filter((cardId) => !removing.has(cardId));
+  const { [target]: _removed, ...rest } = groups;
+  return remaining.length ? { ...rest, [target]: remaining } : rest;
+}
+
+export function deleteGroup(groups: CardGroups, name: string): CardGroups {
+  const target = findGroupName(groups, name);
+  if (!target) return groups;
+  const { [target]: _removed, ...rest } = groups;
+  return rest;
+}
+
+/**
+ * Renames a group, merging into the destination when one already goes by that name.
+ *
+ * Merging rather than refusing, because renaming "Networking " to "Networking" is a
+ * tidy-up and being told the name is taken by the group you are looking at is absurd.
+ */
+export function renameGroup(groups: CardGroups, from: string, to: string): CardGroups {
+  const source = findGroupName(groups, from);
+  const name = normalizeGroupName(to);
+  if (!source || !name) return groups;
+  const destination = findGroupName(groups, name);
+  if (destination === source) {
+    // Same group, different spelling: keep the ids, take the new capitalization.
+    const { [source]: ids, ...rest } = groups;
+    return { ...rest, [name]: ids };
+  }
+  const { [source]: moving, ...rest } = groups;
+  return { ...rest, [destination ?? name]: uniqueCardIds([...(destination ? groups[destination] : []), ...moving]) };
+}
+
+/**
+ * Drops ids for questions that no longer exist, and any group left empty by that.
+ *
+ * Deleting a question from the library does not know or care what it was grouped
+ * under, so without this a group slowly fills with ids that match nothing and its
+ * count stops agreeing with what the filter shows.
+ */
+export function cleanCardGroups(groups: CardGroups, cards: readonly StudyCard[]): CardGroups {
+  const live = new Set(cards.map((card) => card.id));
+  const cleaned: CardGroups = {};
+  for (const [name, cardIds] of Object.entries(groups)) {
+    const remaining = uniqueCardIds(cardIds).filter((cardId) => live.has(cardId));
+    if (remaining.length) cleaned[name] = remaining;
+  }
+  return cleaned;
+}
+
+export function filterCardsByGroup(cards: readonly StudyCard[], groups: CardGroups, name: string): StudyCard[] {
+  const target = findGroupName(groups, name);
+  if (!target) return [];
+  const members = new Set(groups[target]);
+  return cards.filter((card) => members.has(card.id));
+}
+
+/** Questions in no group at all, which is where everything starts. */
+export function filterUngroupedCards(cards: readonly StudyCard[], groups: CardGroups): StudyCard[] {
+  const grouped = new Set(Object.values(groups).flat());
+  return cards.filter((card) => !grouped.has(card.id));
+}
+
+export type CardLabel = "not-yet" | "got-it" | "unrated";
+export type LabelFilter = CardLabel | "all";
+
+/**
+ * Which of the three labels the library shows a question under.
+ *
+ * The retired Hard and Good ratings read as Not yet, as they do everywhere else: they
+ * always behaved as in-pool, and a filter that gave them a category of their own would
+ * put questions you can still be asked somewhere you would never think to look.
+ */
+export function cardLabel(card: StudyCard): CardLabel {
+  if (card.masteryRating === null || card.masteryRating === undefined) return "unrated";
+  return card.masteryRating === MasteryRating.Easy ? "got-it" : "not-yet";
+}
+
+export function filterCardsByLabel(cards: readonly StudyCard[], label: LabelFilter): StudyCard[] {
+  if (label === "all") return [...cards];
+  return cards.filter((card) => cardLabel(card) === label);
+}
+
+/** Counts for every label at once, so the filter can say what each one holds. */
+export function countCardsByLabel(cards: readonly StudyCard[]): Record<LabelFilter, number> {
+  const counts: Record<LabelFilter, number> = { all: cards.length, "not-yet": 0, "got-it": 0, unrated: 0 };
+  for (const card of cards) counts[cardLabel(card)] += 1;
+  return counts;
 }
 
 export interface EasyReviewPlan {
