@@ -852,6 +852,19 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     setNotice(`Mastery pool cleared. ${removed} question${removed === 1 ? "" : "s"} removed.`);
   }
 
+  /**
+   * Leaves the history view after correcting an earlier answer.
+   *
+   * Rating is how you finish with a question, so staying put afterwards reads as the
+   * button having done nothing: the same past question is still there, still showing
+   * its answer, still holding the choices that were picked. Going back to the question
+   * you were on, unrevealed, is what pressing a rating means everywhere else.
+   */
+  function returnToCurrentQuestion() {
+    setHistoryStep(0);
+    setRevealed(false);
+  }
+
   async function handleRating(rating: MasteryRatingValue) {
     if (!currentCard || !studySession) return;
     const now = new Date();
@@ -864,6 +877,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
       && studySession.results.some((result, index) => index > historyIndex && result.cardId === currentCard.id);
     if (supersededByLaterAnswer) {
       setStudySession((existing) => existing ? reviseStudyResult(existing, historyIndex, rating) : null);
+      returnToCurrentQuestion();
       cloud.request();
       return;
     }
@@ -888,7 +902,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
       }));
       if (historyIndex >= 0) {
         setStudySession((existing) => existing ? reviseStudyResult(existing, historyIndex, rating) : null);
-        // Stay on the corrected question rather than jumping away mid-correction.
+        returnToCurrentQuestion();
       } else {
         setStudySession((existing) => existing
           ? advanceStudySession(existing, currentCard.id, rating, [...activeChoices], correctAnswers, now)

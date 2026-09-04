@@ -459,6 +459,12 @@ export function reviseStudyResult(
     results,
     queue,
     completed: Math.max(0, session.completed + (nowCompleted ? 1 : -1)),
+    // A question coming back into the queue has to come back unanswered. Answering it
+    // once already put choices in here, and leaving them means it returns with its old
+    // picks ticked and the answer effectively given away. Advancing clears them for the
+    // same reason; a revision that requeues is the same event by another route. The
+    // recorded result keeps its own copy, so the history still shows what was picked.
+    answers: nowCompleted ? session.answers : { ...session.answers, [previous.cardId]: [] },
   };
 }
 

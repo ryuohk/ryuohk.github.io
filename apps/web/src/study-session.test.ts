@@ -26,6 +26,7 @@ import {
   renameGroup,
   reviseStudyResult,
   selectMasteryAdditions,
+  setSessionAnswer,
   summarizeStudySession,
   updateMasteryCardIds,
   type StudySettings,
@@ -398,6 +399,46 @@ describe("mastery study sessions", () => {
 });
 
 describe("revising an earlier answer", () => {
+  const pooledPair = { ...settings, masteryCardIds: ["one", "two"] };
+
+  // Pressing Previous, correcting a rating, and finding the question back in the queue
+  // with its old choices already ticked gives the answer away before it is asked again.
+  it("brings a requeued question back unanswered", () => {
+    const session = createStudySession([card("one"), card("two")], pooledPair, "mastery", () => 0.99);
+    const first = session.queue[0];
+    const answered = setSessionAnswer(session, first, ["A. One"]);
+    const mastered = advanceStudySession(answered, first, MasteryRating.GotIt, ["A. One"], ["A"]);
+    expect(mastered.answers[first]).toEqual([]);
+
+    // Put the choices back the way a second pass through the question would.
+    const reselected = setSessionAnswer(mastered, first, ["B. Two"]);
+    const corrected = reviseStudyResult(reselected, 0, MasteryRating.Again);
+
+    expect(corrected.queue).toContain(first);
+    expect(corrected.answers[first]).toEqual([]);
+  });
+
+  it("keeps what was picked in the recorded result, which is the history", () => {
+    const session = createStudySession([card("one"), card("two")], pooledPair, "mastery", () => 0.99);
+    const first = session.queue[0];
+    const mastered = advanceStudySession(session, first, MasteryRating.GotIt, ["A. One"], ["A"]);
+    const corrected = reviseStudyResult(mastered, 0, MasteryRating.Again);
+
+    expect(corrected.results[0].selectedAnswers).toEqual(["A"]);
+  });
+
+  it("leaves the answers alone when the correction retires the question instead", () => {
+    const session = createStudySession([card("one"), card("two")], pooledPair, "mastery", () => 0.99);
+    const first = session.queue[0];
+    const again = advanceStudySession(session, first, MasteryRating.Again, ["A. One"], ["A"]);
+    const withPicks = setSessionAnswer(again, session.queue[1], ["B. Two"]);
+    const corrected = reviseStudyResult(withPicks, 0, MasteryRating.GotIt);
+
+    expect(corrected.queue).not.toContain(first);
+    // Stored as picked; normalizing to a label happens when the result is recorded.
+    expect(corrected.answers[session.queue[1]]).toEqual(["B. Two"]);
+  });
+
   const pooled = { ...settings, masteryCardIds: ["one", "two"] };
 
   it("brings a question back into the set when a retiring label is corrected downward", () => {
