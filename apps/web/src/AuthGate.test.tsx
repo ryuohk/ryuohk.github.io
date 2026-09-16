@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AuthState } from "./auth";
 
 const auth = vi.hoisted(() => ({ state: null as AuthState | null }));
-vi.mock("./auth", () => ({ useAuthState: () => auth.state, sendSignInLink: vi.fn(), signOut: vi.fn() }));
+vi.mock("./auth", () => ({ useAuthState: () => auth.state, signInWithPassword: vi.fn(), signOut: vi.fn() }));
 import { AuthGate } from "./AuthGate";
 
 function render(status: AuthState["status"], error?: string) {
@@ -16,20 +16,20 @@ describe("login screen", () => {
   it("opens the flashcards for an admitted session without asking for email", () => {
     const html = render("ready");
     expect(html).toContain("FLASHCARDS");
-    expect(html).not.toContain("Email me a link");
+    expect(html).not.toContain('type="password"');
   });
 
   it("waits for callback processing instead of showing the email form", () => {
     const html = render("loading");
     expect(html).toContain("Checking your session");
-    expect(html).not.toContain("Email me a link");
+    expect(html).not.toContain('type="password"');
     expect(html).not.toContain("FLASHCARDS");
   });
 
-  it("explains failed links and offers a fresh one", () => {
-    const html = render("sign-in-error", "Request a fresh link.");
-    expect(html).toContain("Request a fresh link.");
-    expect(html).toContain("Email me a link");
+  it("explains failed links and offers password login", () => {
+    const html = render("sign-in-error", "Use your password instead.");
+    expect(html).toContain("Use your password instead.");
+    expect(html).toContain('type="password"');
     expect(html).not.toContain("FLASHCARDS");
   });
 

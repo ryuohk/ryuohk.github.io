@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { sendSignInLink, signOut, useAuthState, type AuthState } from "./auth";
+import { signInWithPassword, signOut, useAuthState, type AuthState } from "./auth";
 
 function Shell({ children }: { children: ReactNode }) {
   return (
@@ -17,42 +17,29 @@ function Shell({ children }: { children: ReactNode }) {
 
 function SignIn({ initialError = "" }: { initialError?: string }) {
   const [email, setEmail] = useState("");
-  const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (!email.trim()) return;
-    setState("sending");
+    if (busy || !email.trim() || !password) return;
+    setBusy(true);
     setError("");
     try {
-      await sendSignInLink(email);
-      setState("sent");
+      await signInWithPassword(email, password);
+      setPassword("");
     } catch (problem) {
       setError(problem instanceof Error ? problem.message : String(problem));
-      setState("idle");
+    } finally {
+      setBusy(false);
     }
-  }
-
-  if (state === "sent") {
-    return (
-      <Shell>
-        <h1>Check your email</h1>
-        <p>
-          If <strong>{email.trim().toLowerCase()}</strong> is on the invite list, a sign-in link is on its way. Open it
-          to sign in and open your flashcards. The link expires shortly and can only be used once.
-        </p>
-        <button className="secondary" onClick={() => setState("idle")}>
-          Use a different address
-        </button>
-      </Shell>
-    );
   }
 
   return (
     <Shell>
       <h1>Sign in</h1>
-      <p>CramBot is invite-only. Enter your address and we will email you a one-time sign-in link. No password needed.</p>
+      <p>CramBot is invite-only. Sign in with the account provided by the library owner.</p>
       <form onSubmit={handleSubmit} className="auth-form">
         <label>
           Email
@@ -61,16 +48,23 @@ function SignIn({ initialError = "" }: { initialError?: string }) {
             autoComplete="email"
             inputMode="email"
             required
+            disabled={busy}
             value={email}
             placeholder="you@example.com"
             onChange={(event) => setEmail(event.target.value)}
           />
         </label>
-        <button type="submit" disabled={state === "sending"}>
-          {state === "sending" ? "Sending…" : "Email me a link"}
+        <label>
+          Password
+          <input type="password" autoComplete="current-password" required disabled={busy}
+            value={password} onChange={(event) => setPassword(event.target.value)} />
+        </label>
+        <button type="submit" disabled={busy}>
+          {busy ? "Signing in…" : "Sign in"}
         </button>
       </form>
-      {error && <p className="auth-error">{error}</p>}
+      {error && <p className="auth-error" role="alert">{error}</p>}
+      <p>Need an account or forgot your password? Contact the library owner.</p>
     </Shell>
   );
 }

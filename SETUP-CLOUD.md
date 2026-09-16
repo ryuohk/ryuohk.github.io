@@ -73,39 +73,48 @@ In the dashboard under **Authentication → URL Configuration**:
 - **Redirect URLs:** add `https://ryuohk.github.io/**` and, for local development,
   `http://localhost:5173/**`
 
-Sign-in links that come back to any other address are rejected, so this step is not
-optional.
+Password login does not use emailed links or require editable email templates.
+These URL settings remain useful for any future email-recovery setup.
 
-For both **Confirm signup** and **Magic Link** under **Authentication → Emails**,
-the sign-in button must use `href="{{ .ConfirmationURL }}"`, not just
-`{{ .SiteURL }}` or `{{ .RedirectTo }}`. Those plain site URLs do not verify the
-email or create a session. CramBot uses the client-only implicit flow so a new
-link can sign the reader in even when it opens in a different browser from the
-one that requested it. Links sent before this change should be replaced with
-fresh links. Expired or already-used links show a retry message in the app.
+## 4. Create private password accounts (before deployment)
 
-## 4. Make sure your friend can actually receive the email
+1. In **Authentication → Sign In / Providers**, disable **Allow new users to sign up**.
+   Also keep anonymous sign-ins disabled. Removing a signup button alone is not
+   sufficient: the public API must reject new registrations.
+2. Keep **Confirm Email** enabled. Only an administrator should explicitly confirm
+   accounts after checking the intended person's identity; do not allow anyone to
+   claim an address on an approved domain without proof.
+3. Add the person's email to `allowed_emails` before creating their account, or use
+   the existing approved-domain rule. Membership and row-level security still
+   control library access independently of whether login succeeds.
+4. In **Authentication → Users → Add user → Create new user**, create the account
+   with a unique temporary password of at least 12 characters and enable
+   **Auto confirm user** for that approved person. Use **Create**, not **Invite**,
+   which sends an email link. Do not grant readers Supabase organization access.
+5. Give the password to the intended person through a trusted private channel.
+   They sign in with email/password and use **Change password** in CramBot.
 
-This is the one part that bites people. Supabase's built-in email service **refuses to
-send to anyone who is not a member of your Supabase organization**, and it is rate
-limited to a handful of messages per hour. Left alone, your own sign-in link would
-arrive and your friend's would fail with "Email address not authorized."
+For an existing account that has no password, or a forgotten password, an admin can
+set a temporary password with `supabase.auth.admin.updateUserById`. Preserve the
+existing user ID so private progress and membership stay attached to the account.
+For example, run the following with the Supabase SDK only in a trusted local admin
+environment, never in the browser or frontend build:
 
-Pick one:
+```js
+import { createClient } from '@supabase/supabase-js';
+const admin = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY,
+  { auth: { persistSession: false, autoRefreshToken: false } });
+const { error } = await admin.auth.admin.updateUserById(process.env.CRAMBOT_USER_ID,
+  { password: process.env.CRAMBOT_TEMP_PASSWORD, email_confirm: true });
+if (error) throw error;
+```
 
-**Option A, free and instant.** In the dashboard, **Organization → Team → Invite**, and
-invite your friend's address with the read-only role. Supabase's mailer will then
-deliver to that address. The trade-off is that they can see the project dashboard. For
-two friends sharing a study app that is usually fine.
-
-**Option B, better long term.** Set up custom SMTP under **Authentication → Emails →
-SMTP Settings**. Brevo's free tier sends 300 messages a day and only needs a verified
-sender address, no domain purchase. This removes both the recipient restriction and the
-rate limit, and your friend needs no Supabase access at all.
-
-Sessions persist and refresh themselves, so a sign-in link is only needed on a new
-device. Option A is enough to get going; move to Option B if email starts feeling
-flaky.
+Use temporary local environment variables; do not commit passwords or privileged
+keys, put them in `VITE_*` variables, or share them in chat. Clear them afterward.
+Normal sign-in and password changes do not depend on SMTP. If Supabase's secure
+password-change policy requires email reauthentication for an old session, sign out
+and sign in with the current password before changing it. Forgotten passwords are
+reset by the administrator until a reliable email-recovery flow is configured.
 
 ## 5. Feed the keys to the build
 
@@ -146,9 +155,9 @@ browser. You should get a sign-in screen instead of the app.
 If you still see the old app, the previous service worker is serving its cache. Reload
 once more, or press Ctrl+Shift+R.
 
-Enter your own address, then open the emailed link **in the same browser**. Opening
-it elsewhere fails, because the sign-in exchange is tied to the browser that asked.
-CramBot then loads, empty, with a **Synced** badge in the top right.
+Enter your email and the password set by the administrator. Use **Change password**
+to replace a temporary password. CramBot then loads, empty, with a **Synced** badge
+in the top right.
 
 ## 8. Upload your question library
 
@@ -177,7 +186,7 @@ should see 286 rows, and **Reports → Database** should show roughly 35 MB used
 ## 9. Open it on your phone
 
 1. Go to <https://ryuohk.github.io/> in Safari (iPhone) or Chrome (Android).
-2. Sign in with the same address. Open the emailed link on the phone itself.
+2. Sign in with the same email and password. No email link is needed.
 3. The badge shows **Syncing…** while it downloads the library. First pull is the slow
    one; do it on wi-fi.
 4. Once it settles on **Synced**, the card count matches your desktop.
@@ -191,13 +200,9 @@ mastery labels of their own; your rating history stays yours.
 
 ## 10. Lock the door behind you
 
-Once you have both signed in at least once, go to **Authentication → Sign In / Providers
-→ Email** and turn off **Allow new users to sign up**. After that, not even an
-accidental signup is possible.
-
-You can skip this and still be safe: an uninvited account gets no membership row, so
-row-level security hands it an empty library and rejects every write. This step just
-removes the possibility entirely.
+Confirm **Allow new users to sign up** is still disabled as configured in step 4.
+Keep it disabled when adding people: create their accounts as an administrator.
+The membership checks and database policies remain a second access boundary.
 
 ---
 
@@ -212,7 +217,9 @@ Add someone:
 insert into public.allowed_emails (email, note) values ('new@example.com', 'why');
 ```
 
-They then sign in normally and a trigger grants membership.
+Create their password account as described in step 4. A trigger grants membership
+when the account is created. For an existing account, backfill membership using the
+migration rather than deleting and recreating the account.
 
 Remove someone:
 
@@ -256,7 +263,8 @@ Nothing here can lose your data: IndexedDB stays the source of truth on each dev
 - **"Not on the invite list"** after signing in: the address is not in `allowed_emails`,
   or it was added after the account was created. Add it, then run the backfill statement
   at the bottom of the migration.
-- **No email arrives**: see step 4. Check **Authentication → Logs** in the dashboard.
+- **No password / forgotten password**: ask the administrator to set a temporary
+  password as described in step 4. Password login does not send an email.
 - **Badge stuck on "Sync problem"**: hover it for the error. Usually a missing redirect
   URL from step 3 or an expired session; sign out and back in.
 - **Badge says "queued"**: normal offline behavior. Changes drain on reconnect.

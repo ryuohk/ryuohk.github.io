@@ -59,6 +59,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .auth-card .secondary { min-height: 44px; }
 .auth-error { margin: 14px 0 0; color: #a33b3b; font-size: 13px; }
 .auth-loading { margin: 0; color: #4e6079; }
+.password-overlay { position: fixed; inset: 0; z-index: 100; overflow-y: auto; background: #0b1220cc; }
 .notice { margin-bottom: 22px; padding: 12px 15px; border: 1px solid #dbe4f1; border-radius: 10px; color: #4e6079; background: #f9fbff; font-size: 13px; }
 .notice.sync-failure { display: grid; gap: 6px; border-color: #efc6c2; color: #7a3a34; background: #fff6f5; }
 .notice.sync-failure strong { color: #a82419; }

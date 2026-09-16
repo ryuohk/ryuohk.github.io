@@ -1,6 +1,6 @@
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
 
-export const SIGN_IN_LINK_ERROR = "This sign-in link could not be used. It may have expired or already been used. Request a new link below.";
+export const SIGN_IN_LINK_ERROR = "Your session could not be restored from this link. Sign in with your email and password below instead.";
 
 /** Wait for URL authentication before deciding whether to show the email form. */
 export async function restoreSession(client: SupabaseClient): Promise<{ session: Session | null; error?: string }> {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { signOut, type AuthState } from "./auth";
+import { PasswordSettings } from "./PasswordSettings";
 import { repairRunTogetherText, shouldShowAnswerText, splitCapturedList, splitCardFront, stripChoiceLabel } from "./card-content";
 import { DiscussionPanel } from "./DiscussionPanel";
 import { ALL_EXAMS, filterCardsByExam, listExamCodes } from "./exam-filter";
@@ -1335,7 +1336,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
             </select></label>}
             <SyncBadge cloud={cloud} />
             <button className="secondary" disabled={busy || cards.length === 0} onClick={handleExport}>Export backup</button>
-            {auth?.status === "ready" && <button className="secondary" onClick={() => void signOut()}>Sign out</button>}
+            {auth?.status === "ready" && <><PasswordSettings /><button className="secondary" onClick={() => void signOut()}>Sign out</button></>}
           </div>
         </header>
 

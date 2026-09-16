@@ -138,18 +138,28 @@ export function useAuthState(): AuthState {
   return state;
 }
 
-/** Where the emailed link should land. Must be listed in the Supabase redirect allowlist. */
-export function redirectTarget(): string {
-  return `${window.location.origin}${window.location.pathname}`;
+export async function signInWithPassword(email: string, password: string): Promise<void> {
+  if (!supabase) throw new Error("Cloud sync is not configured for this build.");
+  if (!email.trim() || !password) throw new Error("Enter your email and password.");
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: email.trim().toLowerCase(), password,
+  });
+  if (error?.code === "invalid_credentials") throw new Error("The email or password is incorrect.");
+  if (error?.code === "email_not_confirmed") throw new Error("Ask the library owner to confirm this account in Supabase.");
+  if (error) throw error;
+  if (!data.session) throw new Error("Sign-in did not complete. Please try again.");
 }
 
-export async function sendSignInLink(email: string): Promise<void> {
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
   if (!supabase) throw new Error("Cloud sync is not configured for this build.");
-  const { error } = await supabase.auth.signInWithOtp({
-    email: email.trim().toLowerCase(),
-    options: { emailRedirectTo: redirectTarget() },
+  if (!currentPassword) throw new Error("Enter your current password.");
+  if (newPassword.length < 12) throw new Error("Use at least 12 characters for your new password.");
+  if (newPassword === currentPassword) throw new Error("Choose a different password.");
+  const { data, error } = await supabase.auth.updateUser({
+    password: newPassword, current_password: currentPassword,
   });
   if (error) throw error;
+  if (!data.user) throw new Error("The password change did not complete. Please try again.");
 }
 
 export async function signOut(): Promise<void> {
