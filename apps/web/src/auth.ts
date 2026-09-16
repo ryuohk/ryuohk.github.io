@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { clearStudyStateMarkers } from "./study-state";
 import { cloudEnabled, supabase } from "./supabase";
+import { restoreSession, SIGN_IN_LINK_ERROR } from "./auth-session";
 
 export type AuthStatus =
   /** Built without backend credentials: everything stays on this device. */
@@ -10,6 +11,8 @@ export type AuthStatus =
   | "loading"
   /** Nobody is signed in. */
   | "signed-out"
+  /** The email callback failed; show a reason and allow a fresh link. */
+  | "sign-in-error"
   /** Signed in, but the address is not on the invite list. */
   | "unauthorized"
   /** Signed in, but the membership lookup itself failed. Not the same as uninvited. */
@@ -19,7 +22,7 @@ export type AuthStatus =
 
 export interface AuthState {
   status: AuthStatus;
-  /** Why the membership lookup failed, when status is "error". */
+  /** Why sign-in or the membership lookup failed. */
   error?: string;
   session: Session | null;
   email: string | null;
@@ -78,22 +81,56 @@ export function useAuthState(): AuthState {
 
   useEffect(() => {
     if (!supabase) return;
+    const client = supabase;
     let active = true;
+    let restored = false;
+    let revision = 0;
+    const timers = new Set<ReturnType<typeof setTimeout>>();
 
-    supabase.auth.getSession().then(({ data }) => {
-      void resolveMembership(data.session).then((next) => {
-        if (active) setState(next);
-      });
+    async function updateSession(session: Session | null) {
+      const current = ++revision;
+      try {
+        const next = await resolveMembership(session);
+        if (active && current === revision) setState(next);
+      } catch (error) {
+        if (active && current === revision) {
+          setState({
+            ...SIGNED_OUT, session, email: session?.user.email ?? null, userId: session?.user.id ?? null,
+            status: session ? "error" : "sign-in-error",
+            error: session ? describeMembershipError(error) : SIGN_IN_LINK_ERROR,
+          });
+        }
+      }
+    }
+
+    const { data: subscription } = client.auth.onAuthStateChange((event, session) => {
+      // restoreSession owns the initial state, including callback errors. The SDK's
+      // initial null session must not overwrite a failed-link explanation.
+      if (event === "INITIAL_SESSION") return;
+      // Supabase invokes listeners while holding its auth lock. Membership queries
+      // use that same client, so start them only after the listener has returned.
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        if (active && restored) void updateSession(session);
+      }, 0);
+      timers.add(timer);
     });
 
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
-      void resolveMembership(session).then((next) => {
-        if (active) setState(next);
-      });
+    void restoreSession(client).then(async ({ session, error }) => {
+      if (!active) return;
+      restored = true;
+      if (error) setState({ ...SIGNED_OUT, status: "sign-in-error", error });
+      else await updateSession(session);
+    }).catch(() => {
+      if (active) {
+        setState({ ...SIGNED_OUT, status: "sign-in-error", error: SIGN_IN_LINK_ERROR });
+        restored = true;
+      }
     });
 
     return () => {
       active = false;
+      for (const timer of timers) clearTimeout(timer);
       subscription.subscription.unsubscribe();
     };
   }, []);

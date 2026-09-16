@@ -15,10 +15,10 @@ function Shell({ children }: { children: ReactNode }) {
   );
 }
 
-function SignIn() {
+function SignIn({ initialError = "" }: { initialError?: string }) {
   const [email, setEmail] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initialError);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -40,7 +40,7 @@ function SignIn() {
         <h1>Check your email</h1>
         <p>
           If <strong>{email.trim().toLowerCase()}</strong> is on the invite list, a sign-in link is on its way. Open it
-          on this device. The link expires shortly.
+          to sign in and open your flashcards. The link expires shortly and can only be used once.
         </p>
         <button className="secondary" onClick={() => setState("idle")}>
           Use a different address
@@ -121,6 +121,7 @@ export function AuthGate({ children }: { children: (auth: AuthState) => ReactNod
     );
   }
   if (auth.status === "signed-out") return <SignIn />;
+  if (auth.status === "sign-in-error") return <SignIn key="sign-in-error" initialError={auth.error} />;
   if (auth.status === "unauthorized") return <NotInvited email={auth.email} />;
   if (auth.status === "error") return <MembershipFailed detail={auth.error} email={auth.email} />;
 

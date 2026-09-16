@@ -76,6 +76,14 @@ In the dashboard under **Authentication → URL Configuration**:
 Sign-in links that come back to any other address are rejected, so this step is not
 optional.
 
+For both **Confirm signup** and **Magic Link** under **Authentication → Emails**,
+the sign-in button must use `href="{{ .ConfirmationURL }}"`, not just
+`{{ .SiteURL }}` or `{{ .RedirectTo }}`. Those plain site URLs do not verify the
+email or create a session. CramBot uses the client-only implicit flow so a new
+link can sign the reader in even when it opens in a different browser from the
+one that requested it. Links sent before this change should be replaced with
+fresh links. Expired or already-used links show a retry message in the app.
+
 ## 4. Make sure your friend can actually receive the email
 
 This is the one part that bites people. Supabase's built-in email service **refuses to

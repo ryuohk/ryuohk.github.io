@@ -15,7 +15,10 @@ export const supabase: SupabaseClient | null =
           persistSession: true,
           autoRefreshToken: true,
           detectSessionInUrl: true,
-          flowType: "pkce",
+          // Email links can open in a different browser from the one that requested
+          // them (including outside the installed PWA). This client-only app must
+          // not depend on a code verifier stored in the requesting browser.
+          flowType: "implicit",
         },
       })
     : null;
