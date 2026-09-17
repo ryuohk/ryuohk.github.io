@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { signOut, type AuthState } from "./auth";
 import { PasswordSettings } from "./PasswordSettings";
 import { repairRunTogetherText, shouldShowAnswerText, splitCapturedList, splitCardFront, stripChoiceLabel } from "./card-content";
@@ -48,6 +48,7 @@ import {
   saveImport,
   saveReview,
 } from "./db";
+import { consolidateLibrary, remapSettings, remapSession } from "./deduplication";
 import { prepareImportSelection } from "./importer";
 import {
   addCardsToGroup,
@@ -461,12 +462,22 @@ function CountField({ label, value, onCommit }: { label: string; value: number; 
 
 export default function App({ auth }: { auth?: AuthState } = {}) {
   const restoredSession = useMemo(readStudySession, []);
-  const [cards, setCards] = useState<StudyCard[]>([]);
-  const [questions, setQuestions] = useState<CapturedQuestion[]>([]);
+  const [storedCards, setCards] = useState<StudyCard[]>([]);
+  const [storedQuestions, setQuestions] = useState<CapturedQuestion[]>([]);
+  const { cards, questions, aliases } = useMemo(() => consolidateLibrary(storedQuestions, storedCards), [storedQuestions, storedCards]);
+  // handleRemoteChange below is frozen with useCallback([]) so it never re-subscribes
+  // cloud sync; it still needs today's aliases when it fires, hence the ref rather
+  // than closing over the `aliases` value directly.
+  const aliasesRef = useRef(aliases);
+  aliasesRef.current = aliases;
   const [view, setView] = useState<View>("study");
   const [studyMode, setStudyMode] = useState<StudyMode>(restoredSession?.mode ?? "mastery");
-  const [studySettings, setStudySettings] = useState<StudySettings>(() => readStudySettings(restoredSession));
-  const [studySession, setStudySession] = useState<StudySession | null>(restoredSession);
+  const [storedSettings, setStoredSettings] = useState<StudySettings>(() => readStudySettings(restoredSession));
+  const studySettings = useMemo(() => remapSettings(storedSettings, aliases), [storedSettings, aliases]);
+  const setStudySettings: Dispatch<SetStateAction<StudySettings>> = (update) => setStoredSettings((previous) => typeof update === "function" ? update(remapSettings(previous, aliasesRef.current)) : update);
+  const [storedSession, setStoredSession] = useState<StudySession | null>(restoredSession);
+  const studySession = useMemo(() => remapSession(storedSession, aliases), [storedSession, aliases]);
+  const setStudySession: Dispatch<SetStateAction<StudySession | null>> = (update) => setStoredSession((previous) => typeof update === "function" ? update(remapSession(previous, aliasesRef.current)) : update);
   const [revealed, setRevealed] = useState(false);
   const [query, setQuery] = useState("");
   // Not persisted, unlike the exam filter. That one says which course you are on and
@@ -609,8 +620,8 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
    * and the server will decide on it either way.
    */
   const canDeleteCard = useCallback(
-    (card: StudyCard) => cloud.phase === "disabled" || auth?.isOwner || !card.createdBy || card.createdBy === auth?.userId,
-    [cloud.phase, auth?.isOwner, auth?.userId],
+    (card: StudyCard) => storedCards.filter((source) => (aliases.get(source.id) ?? source.id) === card.id).every((source) => cloud.phase === "disabled" || auth?.isOwner || !source.createdBy || source.createdBy === auth?.userId),
+    [cloud.phase, auth?.isOwner, auth?.userId, storedCards, aliases],
   );
 
   const [historyStep, setHistoryStep] = useState(0);
@@ -735,7 +746,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     setBusy(true);
     try {
       const inputs = await Promise.all(files.map((file) => file.text().then((text) => JSON.parse(text) as unknown)));
-      const selection = prepareImportSelection(inputs, cards);
+      const selection = prepareImportSelection(inputs, cards, new Date(), storedQuestions);
       if (selection.kind === "library") {
         await restoreLibrary(selection.library.questions, selection.library.cards, selection.library.reviews);
         if (selection.library.studySettings) {
@@ -1157,8 +1168,10 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     if (!window.confirm(`${confirmation}\n\n${reach}${skipped}`)) return;
     setBusy(true);
     try {
-      await removeCards(cardsToRemove);
-      const removedIds = new Set(cardsToRemove.map((card) => card.id));
+      const selectedIds = new Set(cardsToRemove.map((card) => card.id));
+      const sources = storedCards.filter((card) => selectedIds.has(aliases.get(card.id) ?? card.id));
+      await removeCards(sources);
+      const removedIds = new Set(sources.map((card) => card.id));
       setCards((existing) => existing.filter((card) => !removedIds.has(card.id)));
       setSelectedCardIds((existing) => new Set([...existing].filter((id) => !removedIds.has(id))));
       setStudySettings((existing) => ({

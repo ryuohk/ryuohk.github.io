@@ -1,6 +1,7 @@
-import { generateCards, parseCaptureBundle } from "@crambot/core";
+import { generateCards, parseCaptureBundle, questionContentKey } from "@crambot/core";
+import { cardContentKey } from "./deduplication";
 import type { StudySession, StudySettings } from "./study-session";
-import { MasteryRating, type CapturedQuestion, type ReviewLog, type StudyCard } from "./types";
+import { MasteryRating, type CapturedQuestion, type GeneratedCard, type ReviewLog, type StudyCard } from "./types";
 
 export interface PreparedImport {
   questions: CapturedQuestion[];
@@ -27,7 +28,7 @@ function questionQuality(question: CapturedQuestion): number {
     + (question.discussion?.comments.length || 0);
 }
 
-export function prepareBatchImport(inputs: unknown[], existingCards: StudyCard[] = [], now = new Date()): PreparedImport {
+export function prepareBatchImport(inputs: unknown[], existingCards: StudyCard[] = [], now = new Date(), existingQuestions: CapturedQuestion[] = []): PreparedImport {
   if (!inputs.length) throw new TypeError("Choose at least one capture file.");
   const bundles = inputs.map((input) => parseCaptureBundle(input));
   const questionsById = new Map<string, CapturedQuestion>();
@@ -39,15 +40,32 @@ export function prepareBatchImport(inputs: unknown[], existingCards: StudyCard[]
   }
 
   const existingById = new Map(existingCards.map((card) => [card.id, card]));
+  const questionsByExistingId = new Map(existingQuestions.map((question) => [question.id, question]));
+  const existingByContent = new Map<string, StudyCard>();
+  for (const card of existingCards) {
+    const question = questionsByExistingId.get(card.questionId);
+    if (question) {
+      try {
+        existingByContent.set(JSON.stringify([questionContentKey(question), cardContentKey(card)]), card);
+      } catch {
+        // Keep malformed legacy records, but do not use them as equality evidence.
+      }
+    }
+  }
   const cards: StudyCard[] = [];
   let added = 0;
   let updated = 0;
 
   for (const question of questionsById.values()) {
+    const matched = existingByContent.get(JSON.stringify([questionContentKey(question), cardContentKey((generateCards(question) as GeneratedCard[])[0])]));
+    if (matched) question.id = matched.questionId;
     for (const generated of generateCards(question) as StudyCard[]) {
-      const existing = existingById.get(generated.id);
+      const existing = matched ?? (existingQuestions.length === 0 ? existingById.get(generated.id) : undefined);
       cards.push({
         ...generated,
+        id: existing?.id ?? generated.id,
+        createdBy: existing?.createdBy,
+        createdAt: existing?.createdAt ?? generated.createdAt,
         masteryRating: existing?.masteryRating ?? null,
         ratingUpdatedAt: existing?.ratingUpdatedAt ?? null,
         updatedAt: now.toISOString(),
@@ -72,14 +90,14 @@ export function prepareImport(input: unknown, existingCards: StudyCard[] = [], n
   return prepareBatchImport([input], existingCards, now);
 }
 
-export function prepareImportSelection(inputs: unknown[], existingCards: StudyCard[] = [], now = new Date()) {
+export function prepareImportSelection(inputs: unknown[], existingCards: StudyCard[] = [], now = new Date(), existingQuestions: CapturedQuestion[] = []) {
   if (!inputs.length) throw new TypeError("Choose at least one JSON file.");
   const libraryInputs = inputs.filter((input) => input && typeof input === "object" && (input as Record<string, unknown>).format === "crambot.library");
   if (libraryInputs.length) {
     if (inputs.length !== 1) throw new TypeError("Import a library backup by itself, not together with capture files.");
     return { kind: "library" as const, library: prepareLibraryRestore(libraryInputs[0]) };
   }
-  return { kind: "captures" as const, prepared: prepareBatchImport(inputs, existingCards, now) };
+  return { kind: "captures" as const, prepared: prepareBatchImport(inputs, existingCards, now, existingQuestions) };
 }
 
 export function prepareLibraryRestore(input: unknown): PreparedLibraryRestore {

@@ -75,7 +75,7 @@ After rebuilding the extension, use **Reload** on its extensions page.
 
 Use **Stop automatic capture** to interrupt immediately. Every question whose complete discussion was already captured is retained and written to a partial JSON file; an in-progress pair is excluded. If folder access expires before the file can be written, choose the folder again and select **Save retained capture data**.
 
-Question and answer images are embedded in the capture so they remain available offline and after transfer to another device. The original image URL is retained for stable duplicate detection. Image-heavy pages produce larger JSON files; if an image cannot be downloaded, the export keeps its URL and records a warning instead of failing the whole page.
+Question and answer images are embedded in the capture so they remain available offline and after transfer to another device. The original image URL is retained as a fallback when embedded image data is unavailable. Image-heavy pages produce larger JSON files; if an image cannot be downloaded, the export keeps its URL and records a warning instead of failing the whole page.
 
 If an answer does not appear within four seconds, the export records the timeout and does not invent an answer. Importing that question produces a visible `missing answer` warning card so it can be recaptured.
 
@@ -88,6 +88,21 @@ npm run dev:web
 Open the URL Vite prints, normally `http://localhost:5173`. In CramBot, open **Import** and select one or more downloaded page captures in the same file-picker operation. CramBot combines and deduplicates them during import; no separate merge step is required. Import a full-library backup by itself. A synthetic test capture is available at `fixtures/sample-capture.crambot.json`.
 
 Local development is suitable for desktop testing. Phone installation requires the production `apps/web/dist` directory to be hosted over HTTPS.
+
+## Question equality and existing libraries
+
+Duplicate detection uses normalized content, not supplied question IDs. Previously, imports trusted supplied IDs (allowing identical content under different IDs) and generated IDs omitted correct answers (allowing answer variants to overwrite one another). There was no content cleanup for an existing library.
+
+The conservative equality policy for TASK-0003 is:
+
+- Keep different exam codes, prompts, ordered choices, correct-answer sets, community-answer sets, vote distributions, explanations, discussion counts, and discussion content separate. Text case and punctuation matter. Existing whitespace normalization trims text, collapses repeated spaces and blank lines, and preserves line breaks; this does not compare rendered HTML or visually equivalent text.
+- Ignore question IDs, source-page URLs, question numbers, topics, and capture timestamps. Discussion IDs and source-page URLs are ignored; reply relationships are compared by comment position. All other discussion fields, including authors, dates, relative times, votes, badges, and reference links, matter. A refreshed discussion can therefore remain a separate entry.
+- Images are ordered and include role and alt text. Compare exact embedded data URLs when available, otherwise exact source URLs. Equal embedded data at different URLs consolidates; different bytes at the same URL stays separate. Embedded versus URL-only images remain separate because equality is unverified. Different encodings of visually identical images are not decoded or compared.
+- Legacy cards with different displayed fronts, answers, explanations, images, types, or answer confidence remain separate even if their question records match.
+
+Cleanup covers new captures and imports, existing libraries on load, restored backups, and cloud pulls. The library and study pools show one entry per equality group. Saved groups and session queues map old IDs to the retained card, with duplicate queue positions removed; previous attempts remain in history. Intentional repetition after **Not yet** is unchanged.
+
+Existing records are consolidated as a **non-destructive view**, not physically deleted from IndexedDB or the shared server. Backups and sync retain every original ID and rating record, protecting other members' private progress. The earliest-created card (then ID as a tie-breaker) represents a group. Its visible progress comes from the most recent rating or explicit reset; distinct note blocks and flags are combined, as are topic tags. Original metadata and notes remain in the backing records. Re-imports reuse the matching card ID and preserve its creation time and study data. Deleting a consolidated entry explicitly deletes all its backing cards, subject to the existing ownership checks.
 
 ## Install on a phone
 

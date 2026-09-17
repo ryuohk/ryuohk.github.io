@@ -47,7 +47,7 @@ describe("capture import", () => {
     expect(second.cards[0]).toMatchObject({ masteryRating: MasteryRating.KeepFresh, ratingUpdatedAt: "2026-08-29T12:00:00.000Z" });
   });
 
-  it("combines multiple captures and deduplicates repeated questions", () => {
+  it("combines captures while keeping unverified URL-only and embedded images separate", () => {
     const richerQuestion = {
       ...question,
       images: [{ src: "https://example.test/diagram.png", dataUrl: "data:image/png;base64,iVBORw==", role: "question" }],
@@ -58,10 +58,10 @@ describe("capture import", () => {
       makeCaptureBundle([richerQuestion, secondQuestion]),
     ], [], new Date("2026-08-28T12:00:00Z"));
 
-    expect(result.questions).toHaveLength(2);
-    expect(result.cards).toHaveLength(2);
-    expect(result.added).toBe(2);
-    expect(result.questions.find((candidate) => candidate.number === "1")?.images[0].dataUrl).toBe("data:image/png;base64,iVBORw==");
+    expect(result.questions).toHaveLength(3);
+    expect(result.cards).toHaveLength(3);
+    expect(result.added).toBe(3);
+    expect(result.questions.find((candidate) => candidate.images[0]?.dataUrl)?.images[0].dataUrl).toBe("data:image/png;base64,iVBORw==");
   });
 
   it("counts a duplicated rated card once and preserves its label in a batch", () => {
