@@ -26,20 +26,37 @@ export function stableHash(value) {
   return `${(second >>> 0).toString(16).padStart(8, "0")}${(first >>> 0).toString(16).padStart(8, "0")}`;
 }
 
+// Content equality is independent of capture IDs and source-page metadata.
+// Use the full serialized key for grouping; hashes are only storage identifiers.
+export function questionContentKey(input) {
+  const question = sanitizeQuestion({ ...input, id: "identity" });
+  const discussion = question.discussion;
+  const commentIndex = new Map((discussion?.comments ?? []).map((comment, index) => [comment.id, index]));
+  return JSON.stringify({
+    examCode: question.examCode,
+    prompt: question.prompt,
+    choices: question.choices,
+    correctAnswers: [...question.correctAnswers].sort(),
+    mostVotedAnswers: [...question.mostVotedAnswers].sort(),
+    voteDistribution: question.voteDistribution,
+    explanation: question.explanation,
+    discussionCount: question.discussionCount,
+    discussion: discussion ? {
+      title: discussion.title,
+      isComplete: discussion.isComplete,
+      comments: discussion.comments.map(({ id, parentId, ...content }) => ({
+        ...content, parentIndex: parentId ? commentIndex.get(parentId) : null,
+      })),
+    } : null,
+    images: question.images.map((image) => ({
+      role: image.role, alt: image.alt,
+      content: image.dataUrl || image.src,
+    })),
+  });
+}
+
 export function createQuestionId(question) {
-  const choices = (question.choices ?? [])
-    .map((choice) => `${choice.label}:${normalizeWhitespace(choice.text).toLowerCase()}`)
-    .join("|");
-  const images = (question.images ?? [])
-    .map((image) => `${normalizeWhitespace(image.role)}:${normalizeWhitespace(image.src)}`)
-    .join("|");
-  const identity = [
-    normalizeWhitespace(question.examCode).toUpperCase(),
-    normalizeWhitespace(question.prompt).toLowerCase(),
-    choices,
-    images,
-  ].join("|");
-  return `q_${stableHash(identity)}`;
+  return `q_${stableHash(questionContentKey(question))}`;
 }
 
 function uniqueLabels(values) {
@@ -161,10 +178,12 @@ export function makeCaptureBundle(questions, metadata = {}) {
   for (const input of questions ?? []) {
     try {
       const question = sanitizeQuestion(input, metadata);
-      if (unique.has(question.id)) {
+      const key = questionContentKey(question);
+      question.id = createQuestionId(question);
+      if (unique.has(key)) {
         warnings.push(`Skipped duplicate question ${question.id}.`);
       } else {
-        unique.set(question.id, question);
+        unique.set(key, question);
       }
     } catch (error) {
       warnings.push(error instanceof Error ? error.message : String(error));

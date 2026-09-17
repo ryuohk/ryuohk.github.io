@@ -130,7 +130,7 @@ test("image answers ignore unmatched Box or Step heading letters", () => {
   assert.doesNotMatch(card.back, /B\nO\nX/);
 });
 
-test("embedded image data survives card generation without changing source identity", () => {
+test("embedded image data survives card generation and is distinct from unverified URL-only images", () => {
   const imageQuestion = {
     ...sample,
     images: [{
@@ -142,7 +142,7 @@ test("embedded image data survives card generation without changing source ident
   const idWithoutEmbeddedBytes = createQuestionId({ ...imageQuestion, images: [{ src: imageQuestion.images[0].src, role: "question" }] });
   const [card] = generateCards(imageQuestion);
 
-  assert.equal(createQuestionId(imageQuestion), idWithoutEmbeddedBytes);
+  assert.notEqual(createQuestionId(imageQuestion), idWithoutEmbeddedBytes);
   assert.equal(card.questionImages[0].dataUrl, imageQuestion.images[0].dataUrl);
 });
 
@@ -158,4 +158,42 @@ test("non-image embedded payloads are discarded while the source URL remains", (
 
   assert.equal(card.questionImages[0].dataUrl, "");
   assert.equal(card.questionImages[0].src, "https://example.test/question.png");
+});
+
+
+test("content dedup ignores supplied IDs but retains every answer variant", () => {
+  const bundle = makeCaptureBundle([
+    { ...sample, id: "one" }, { ...sample, id: "two", number: "99", sourceUrl: "elsewhere" },
+    { ...sample, id: "one", correctAnswers: ["B"] },
+    { ...sample, choices: [{ label: "A", text: "Different" }, sample.choices[1]] },
+  ]);
+  assert.equal(bundle.questions.length, 3);
+  assert.equal(new Set(bundle.questions.map((q) => q.id)).size, 3);
+  assert.equal(parseCaptureBundle(bundle).questions.length, 3);
+});
+
+test("case, choice order, explanations and discussion changes are content", () => {
+  const variants = [
+    sample, { ...sample, prompt: sample.prompt.toLowerCase() },
+    { ...sample, choices: [...sample.choices].reverse() },
+    { ...sample, explanation: "Extra explanation" },
+    { ...sample, discussion: { comments: [{ id: "c", content: "Extra discussion" }] } },
+    { ...sample, examCode: "OTHER" },
+  ];
+  assert.equal(makeCaptureBundle(variants).questions.length, variants.length);
+});
+
+test("images compare bytes when embedded and exact URLs otherwise, including role and alt", () => {
+  const image = { src: "https://example.test/1", dataUrl: "data:image/png;base64,AA==", role: "question", alt: "diagram" };
+  const withImage = (overrides) => ({ ...sample, images: [{ ...image, ...overrides }] });
+  assert.equal(makeCaptureBundle([withImage({}), withImage({ src: "https://example.test/2" })]).questions.length, 1);
+  for (const change of [{ dataUrl: "data:image/png;base64,BB==" }, { role: "answer" }, { alt: "different" }, { dataUrl: "" }]) {
+    assert.equal(makeCaptureBundle([withImage({}), withImage(change)]).questions.length, 2);
+  }
+  assert.equal(makeCaptureBundle([withImage({ dataUrl: "" }), withImage({ dataUrl: "", src: "https://example.test/2" })]).questions.length, 2);
+});
+
+test("answer labels are sets and serialized fields cannot collide through delimiters", () => {
+  assert.equal(createQuestionId({ ...sample, correctAnswers: ["A", "B"] }), createQuestionId({ ...sample, correctAnswers: ["B", "A"] }));
+  assert.notEqual(createQuestionId({ ...sample, prompt: "x|y", examCode: "z" }), createQuestionId({ ...sample, prompt: "y", examCode: "z|x" }));
 });
