@@ -1,0 +1,204 @@
+
+> crambot@0.1.0 check
+> npm run test && npm run build
+
+
+> crambot@0.1.0 test
+> npm run test --workspaces --if-present
+
+
+> @crambot/extension@0.3.2 test
+> vitest run
+
+
+ RUN  v3.2.7 C:/Users/RyuOhkawa/OneDrive - Aeon Nexus Corporation/Documents/Project/managed-projects/ryuohk/ryuohk.github.io/apps/extension
+
+ ✓ test/image-fetch.test.js (3 tests) 6ms
+ ✓ test/messaging.test.js (5 tests) 7ms
+ ✓ test/output-directory.test.js (4 tests) 7ms
+ ✓ test/automation.test.js (4 tests) 57ms
+ ✓ test/parser.test.js (21 tests) 118ms
+
+ Test Files  5 passed (5)
+      Tests  37 passed (37)
+   Start at  09:06:16
+   Duration  1.27s (transform 185ms, setup 0ms, collect 265ms, tests 195ms, environment 1.21s, prepare 897ms)
+
+
+> @crambot/web@0.1.0 test
+> vitest run
+
+
+ RUN  v3.2.7 C:/Users/RyuOhkawa/OneDrive - Aeon Nexus Corporation/Documents/Project/managed-projects/ryuohk/ryuohk.github.io/apps/web
+
+ ✓ src/study-state.test.ts (17 tests) 9ms
+ ✓ src/exam-filter.test.ts (2 tests) 15ms
+ ✓ src/card-content.test.ts (23 tests) 12ms
+ ✓ src/topics.test.ts (17 tests) 24ms
+ ✓ src/auth.test.ts (7 tests) 10ms
+ ✓ src/speech.test.ts (48 tests) 22ms
+ ✓ src/DiscussionPanel.test.ts (2 tests) 4ms
+ ✓ src/auth-password.test.ts (12 tests) 11ms
+ ✓ src/study-session.test.ts (47 tests) 32ms
+ ✓ src/importer.test.ts (10 tests) 24ms
+ ✓ src/db.test.ts (4 tests) 28ms
+ ✓ src/library-duplicates.test.ts (9 tests) 41ms
+ ✓ src/deduplication.test.ts (4 tests) 56ms
+ ✓ src/AuthGate.test.tsx (4 tests) 27ms
+ ✓ src/supabase.test.ts (9 tests) 258ms
+ ✓ src/sync.test.ts (19 tests) 28ms
+ ✓ src/AuthGate.password.test.tsx (4 tests) 58ms
+
+ Test Files  17 passed (17)
+      Tests  238 passed (238)
+   Start at  09:06:17
+   Duration  1.67s (transform 1.43s, setup 0ms, collect 4.11s, tests 658ms, environment 861ms, prepare 4.65s)
+
+
+> @crambot/core@0.1.0 test
+> node --test
+
+TAP version 13
+# Subtest: normalizes whitespace without flattening intentional lines
+ok 1 - normalizes whitespace without flattening intentional lines
+  ---
+  duration_ms: 0.8115
+  type: 'test'
+  ...
+# Subtest: question identity is stable across superficial whitespace
+ok 2 - question identity is stable across superficial whitespace
+  ---
+  duration_ms: 1.1998
+  type: 'test'
+  ...
+# Subtest: bundle deduplicates repeated questions
+ok 3 - bundle deduplicates repeated questions
+  ---
+  duration_ms: 0.524
+  type: 'test'
+  ...
+# Subtest: uses a neutral exam code when capture metadata omits it
+ok 4 - uses a neutral exam code when capture metadata omits it
+  ---
+  duration_ms: 0.224
+  type: 'test'
+  ...
+# Subtest: bundle parser rejects malformed files
+ok 5 - bundle parser rejects malformed files
+  ---
+  duration_ms: 0.4376
+  type: 'test'
+  ...
+# Subtest: bundle parser preserves complete threaded discussion data
+ok 6 - bundle parser preserves complete threaded discussion data
+  ---
+  duration_ms: 1.6328
+  type: 'test'
+  ...
+# Subtest: missing discussion counts stay null
+ok 7 - missing discussion counts stay null
+  ---
+  duration_ms: 0.2228
+  type: 'test'
+  ...
+# Subtest: card generation uses source answer and preserves choices
+ok 8 - card generation uses source answer and preserves choices
+  ---
+  duration_ms: 0.3195
+  type: 'test'
+  ...
+# Subtest: card generation marks an unrevealed answer
+ok 9 - card generation marks an unrevealed answer
+  ---
+  duration_ms: 0.3529
+  type: 'test'
+  ...
+# Subtest: image questions remain importable without text choices
+ok 10 - image questions remain importable without text choices
+  ---
+  duration_ms: 0.6889
+  type: 'test'
+  ...
+# Subtest: image answers ignore unmatched Box or Step heading letters
+ok 11 - image answers ignore unmatched Box or Step heading letters
+  ---
+  duration_ms: 0.3175
+  type: 'test'
+  ...
+# Subtest: embedded image data survives card generation and is distinct from unverified URL-only images
+ok 12 - embedded image data survives card generation and is distinct from unverified URL-only images
+  ---
+  duration_ms: 0.2733
+  type: 'test'
+  ...
+# Subtest: non-image embedded payloads are discarded while the source URL remains
+ok 13 - non-image embedded payloads are discarded while the source URL remains
+  ---
+  duration_ms: 0.1269
+  type: 'test'
+  ...
+# Subtest: content dedup ignores supplied IDs but retains every answer variant
+ok 14 - content dedup ignores supplied IDs but retains every answer variant
+  ---
+  duration_ms: 0.3931
+  type: 'test'
+  ...
+# Subtest: case, choice order, explanations and discussion changes are content
+ok 15 - case, choice order, explanations and discussion changes are content
+  ---
+  duration_ms: 0.7202
+  type: 'test'
+  ...
+# Subtest: images compare bytes when embedded and exact URLs otherwise, including role and alt
+ok 16 - images compare bytes when embedded and exact URLs otherwise, including role and alt
+  ---
+  duration_ms: 1.1795
+  type: 'test'
+  ...
+# Subtest: answer labels are sets and serialized fields cannot collide through delimiters
+ok 17 - answer labels are sets and serialized fields cannot collide through delimiters
+  ---
+  duration_ms: 0.1826
+  type: 'test'
+  ...
+1..17
+# tests 17
+# suites 0
+# pass 17
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 80.2169
+
+> crambot@0.1.0 build
+> npm run build --workspaces --if-present
+
+
+> @crambot/extension@0.3.2 build
+> node scripts/build.mjs && node scripts/package.mjs
+
+Built extension at C:\Users\RyuOhkawa\OneDrive - Aeon Nexus Corporation\Documents\Project\managed-projects\ryuohk\ryuohk.github.io\apps\extension\dist
+Packaged extension 0.3.2: 6 files, 23.7 kB -> C:\Users\RyuOhkawa\OneDrive - Aeon Nexus Corporation\Documents\Project\managed-projects\ryuohk\ryuohk.github.io\apps\web\public\crambot-extension.zip
+
+> @crambot/web@0.1.0 build
+> tsc -b && vite build
+
+vite v6.4.3 building for production...
+transforming...
+✓ 96 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/manifest.webmanifest                          0.52 kB
+dist/index.html                                    1.04 kB │ gzip:  0.48 kB
+dist/assets/index-LmqJVlKO.css                    25.55 kB │ gzip:  5.80 kB
+dist/assets/workbox-window.prod.es5-BBnX5xw4.js    5.75 kB │ gzip:  2.36 kB
+dist/assets/index-rv47obO9.js                    285.24 kB │ gzip: 88.79 kB
+✓ built in 895ms
+
+PWA v1.3.0
+mode      generateSW
+precache  11 entries (328.04 KiB)
+files generated
+  dist/sw.js
+  dist/workbox-9c191d2f.js

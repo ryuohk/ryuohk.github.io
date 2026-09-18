@@ -49,6 +49,7 @@ import {
   saveReview,
 } from "./db";
 import { consolidateLibrary, remapSettings, remapSession } from "./deduplication";
+import { libraryDuplicateGroups } from "./library-duplicates";
 import { prepareImportSelection } from "./importer";
 import {
   addCardsToGroup,
@@ -480,6 +481,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
   const setStudySession: Dispatch<SetStateAction<StudySession | null>> = (update) => setStoredSession((previous) => typeof update === "function" ? update(remapSession(previous, aliasesRef.current)) : update);
   const [revealed, setRevealed] = useState(false);
   const [query, setQuery] = useState("");
+  const [duplicatesOnly, setDuplicatesOnly] = useState(false);
   // Not persisted, unlike the exam filter. That one says which course you are on and
   // holds between visits; this one narrows a list you are looking at right now, and
   // coming back to a library that silently hides most of itself is a bug report.
@@ -721,6 +723,8 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
     if (activeTopic && !findTopicName(examQuestions, activeTopic)) setTopicFilter(ALL_TOPICS);
   }, [activeTopic, examQuestions]);
 
+  const duplicateGroups = useMemo(() => libraryDuplicateGroups(cards, questionById), [cards, questionById]);
+
   const filteredCards = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const grouped = activeGroup
@@ -734,11 +738,12 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
         ? filterUntopicedCards(grouped, questionById)
         : grouped;
     return filterCardsByLabel(scoped, labelFilter)
+      .filter((card) => !duplicatesOnly || duplicateGroups.has(card.id))
       // Group names join the haystack, so searching "networking" finds the questions
       // you filed under it even when the word appears nowhere in the question itself.
       .filter((card) => !needle || `${card.front} ${card.back} ${card.notes ?? ""} ${card.tags.join(" ")} ${(groupsByCardId.get(card.id) ?? []).join(" ")}`.toLowerCase().includes(needle))
-      .sort((left, right) => left.front.localeCompare(right.front));
-  }, [activeGroup, activeTopic, cardGroups, examCards, groupFilter, groupsByCardId, labelFilter, query, questionById, topicFilter]);
+      .sort((left, right) => (duplicatesOnly ? duplicateGroups.get(left.id)!.number - duplicateGroups.get(right.id)!.number : 0) || left.front.localeCompare(right.front));
+  }, [activeGroup, activeTopic, cardGroups, examCards, groupFilter, groupsByCardId, labelFilter, query, questionById, topicFilter, duplicatesOnly, duplicateGroups]);
   const selectedCards = useMemo(() => examCards.filter((card) => selectedCardIds.has(card.id)), [examCards, selectedCardIds]);
   const allFilteredSelected = filteredCards.length > 0 && filteredCards.every((card) => selectedCardIds.has(card.id));
 
@@ -1772,6 +1777,10 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 </select>
               </label>
               )}
+              <label className="group-filter">
+                <span>Duplicates only</span>
+                <input type="checkbox" checked={duplicatesOnly} onChange={(event) => { setDuplicatesOnly(event.target.checked); setSelectedCardIds(new Set()); }} />
+              </label>
               <div className="label-filter" role="group" aria-label="Filter by label">
                 {LABEL_FILTERS.map(({ value, label }) => (
                   <button
@@ -1785,6 +1794,7 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
                 ))}
               </div>
             </div>
+            {duplicatesOnly && <p role="status">All copies are included, with each duplicate group together. The earliest copy is marked Reference, but is not protected. Select shown selects every visible copy; keep at least one per group. Other filters may hide members of a group.</p>}
             <div className="library-manager">
               <div><strong>{examFilter === ALL_EXAMS ? `${cards.length} question${cards.length === 1 ? "" : "s"} in your library` : `${examCards.length} ${examFilter} question${examCards.length === 1 ? "" : "s"} (${cards.length} total)`}</strong><span>{selectedCardIds.size
                 ? `${selectedCardIds.size} selected`
@@ -1824,10 +1834,12 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
               {filteredCards.map((card) => {
                 const content = splitCardFront(card.front);
                 const selected = selectedCardIds.has(card.id);
+                const duplicate = duplicatesOnly ? duplicateGroups.get(card.id) : undefined;
                 const memberOf = groupsByCardId.get(card.id) ?? [];
                 return <article className={selected ? "selected" : ""} key={card.id}>
                   <label className="card-checkbox"><input type="checkbox" checked={selected} onChange={() => toggleSelection(card.id)} aria-label={`Select question: ${content.prompt}`} /></label>
                   <div className="library-card-content">
+                    {duplicate && <p>Duplicate group {duplicate.number} · {duplicate.size} copies{duplicate.referenceId === card.id ? " · Reference (earliest copy)" : ""}</p>}
                     <div className="library-card-meta"><span className="tag">{card.tags.join(" · ") || "Uncategorized"}</span>
                       {/* Clickable, because seeing a group on one question is exactly
                           when you want the rest of what is in it. */}
@@ -1846,6 +1858,8 @@ export default function App({ auth }: { auth?: AuthState } = {}) {
               })}
               {!filteredCards.length && <div className="empty-inline">{!cards.length
                 ? "No questions in your library yet."
+                : duplicatesOnly
+                  ? "No duplicate questions match the current filters."
                 : query.trim()
                   ? "No questions match this search."
                   : activeGroup
